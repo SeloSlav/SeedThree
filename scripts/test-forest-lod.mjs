@@ -18,6 +18,18 @@ function cameraAt(x, y, z, target = new Vector3(0, 0, 0)) {
   return camera;
 }
 
+function assertDisjoint(selection) {
+  const near = new Set(selection.nearIndices);
+  for (const index of selection.overviewIndices) {
+    assert.ok(!near.has(index), `tree ${index} must not render in both LOD bands`);
+  }
+  assert.equal(
+    selection.visibleCount,
+    selection.nearIndices.length + selection.overviewIndices.length,
+    'visible count should be the disjoint union of near and overview trees',
+  );
+}
+
 {
   const items = [
     { x: 0, y: 8, z: 0, radius: 10 },
@@ -33,6 +45,7 @@ function cameraAt(x, y, z, target = new Vector3(0, 0, 0)) {
   });
   const camera = cameraAt(0, 24, 90, new Vector3(0, 8, 0));
   const first = selectForestLods(selector, camera, { force: true });
+  assertDisjoint(first);
   assert.ok(first.nearIndices.includes(0), 'front tree should remain in the close-detail rung');
   assert.ok(!first.nearIndices.includes(2) && !first.overviewIndices.includes(2),
     'tree behind the camera should be culled');
@@ -44,6 +57,7 @@ function cameraAt(x, y, z, target = new Vector3(0, 0, 0)) {
     casterBounds: { minX: 118, maxX: 142, minZ: -14, maxZ: 14 },
     casterPadding: 0,
   });
+  assertDisjoint(withCasterBand);
   assert.ok(withCasterBand.overviewIndices.includes(1),
     'off-screen tree intersecting the fitted shadow caster band must remain submitted');
   assert.ok(!withCasterBand.nearIndices.includes(2) && !withCasterBand.overviewIndices.includes(2),
