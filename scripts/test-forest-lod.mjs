@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { PerspectiveCamera, Vector3 } from 'three/webgpu';
 import {
+  createForestCanopyCompanions,
   createForestLodSelector,
   selectForestLods,
 } from '../src/core/forest-lod.js';
@@ -43,6 +44,7 @@ function assertDisjoint(selection) {
   const first = selectForestLods(selector, camera, { force: true });
   assertDisjoint(first);
   assert.ok(first.nearIndices.includes(0), 'front tree should remain in the close-detail rung');
+  assert.ok(first.viewIndices.includes(0), 'front tree should be part of the main-view selection');
   assert.ok(!first.nearIndices.includes(2) && !first.overviewIndices.includes(2),
     'tree behind the camera should be culled');
   assert.ok(!first.nearIndices.includes(1) && !first.overviewIndices.includes(1),
@@ -56,6 +58,8 @@ function assertDisjoint(selection) {
   assertDisjoint(withCasterBand);
   assert.ok(withCasterBand.overviewIndices.includes(1),
     'off-screen tree intersecting the fitted shadow caster band must remain submitted');
+  assert.ok(!withCasterBand.viewIndices.includes(1),
+    'shadow-only caster must not seed render-only canopy companions');
   assert.ok(!withCasterBand.nearIndices.includes(2) && !withCasterBand.overviewIndices.includes(2),
     'caster union must not revive unrelated behind-camera trees');
 
@@ -117,6 +121,43 @@ function assertDisjoint(selection) {
   assert.equal(empty.changed, true,
     'the first completed selection must clear initially populated render buffers');
   assert.equal(empty.revision, 1);
+}
+
+{
+  const source = [
+    { x: 0, y: 8, z: 0, radius: 6 },
+    { x: 11, y: 7, z: 1, radius: 5 },
+    { x: -9, y: 9, z: 5, radius: 7 },
+    { x: 3, y: 6, z: -12, radius: 5 },
+    { x: 150, y: 8, z: 150, radius: 6 },
+  ];
+  const before = structuredClone(source);
+  const options = {
+    neighborRadius: 30,
+    maxCompanions: 2,
+    denseNeighborCount: 3,
+    minOffset: 3,
+    maxOffset: 7,
+    minScale: 0.28,
+    maxScale: 0.44,
+  };
+  const first = createForestCanopyCompanions(source, options);
+  const repeat = createForestCanopyCompanions(source, options);
+  assert.deepEqual(first, repeat, 'canopy companions must be deterministic');
+  assert.deepEqual(source, before, 'companion derivation must not mutate gameplay sources');
+  assert.equal(first.length, source.length, 'companion lists preserve source index identity');
+  assert.equal(first[4].length, 0, 'isolated trees must not expand forest into open ground');
+  assert.equal(first[0].length, 2, 'dense forest anchors may receive two understorey crowns');
+  for (const list of first) {
+    assert.ok(list.length <= 2, 'companion count must remain strictly bounded');
+    for (const companion of list) {
+      const offset = Math.hypot(companion.offsetX, companion.offsetZ);
+      assert.ok(offset >= 1.35 && offset <= 7.1,
+        'companion must remain within its source-to-neighbor corridor');
+      assert.ok(companion.scale >= 0.28 && companion.scale <= 0.44,
+        'companion scale must stay in the configured understorey band');
+    }
+  }
 }
 
 console.log('SeedThree forest LOD: culling, caster union, stability, and hysteresis passed.');

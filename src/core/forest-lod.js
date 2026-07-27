@@ -28,6 +28,16 @@ const DEFAULTS = Object.freeze({
   minimumDirectionAngle: Math.PI / 180,
 });
 
+const COMPANION_DEFAULTS = Object.freeze({
+  neighborRadius: 32,
+  maxCompanions: 2,
+  denseNeighborCount: 4,
+  minOffset: 3.2,
+  maxOffset: 7.2,
+  minScale: 0.3,
+  maxScale: 0.46,
+});
+
 const _projectionView = new Matrix4();
 const _cameraPosition = new Vector3();
 const _cameraDirection = new Vector3();
@@ -131,6 +141,163 @@ function buildCells(items, cellSize) {
   return cells;
 }
 
+function hash01(index, salt) {
+  let value = (index + 1) * 0x9e3779b1 ^ (salt + 1) * 0x85ebca6b;
+  value ^= value >>> 16;
+  value = Math.imul(value, 0x7feb352d);
+  value ^= value >>> 15;
+  value = Math.imul(value, 0x846ca68b);
+  value ^= value >>> 16;
+  return (value >>> 0) / 0x100000000;
+}
+
+/**
+ * Derive deterministic, render-only understorey anchors between existing trees.
+ *
+ * The returned companion lists preserve the source array's index/identity and do
+ * not mutate it. Each companion sits inside a corridor toward a nearby source
+ * tree, so consumers can add forest mass without expanding a forest into roads,
+ * clearings, or other open ground. A consumer should still apply its own terrain
+ * and blocked-area checks before instancing.
+ */
+export function createForestCanopyCompanions(sourceItems, options = {}) {
+  const neighborRadius = Math.max(
+    2,
+    finite(options.neighborRadius, COMPANION_DEFAULTS.neighborRadius),
+  );
+  const maxCompanions = Math.max(
+    0,
+    Math.min(4, Math.floor(finite(
+      options.maxCompanions,
+      COMPANION_DEFAULTS.maxCompanions,
+    ))),
+  );
+  const denseNeighborCount = Math.max(
+    2,
+    Math.floor(finite(
+      options.denseNeighborCount,
+      COMPANION_DEFAULTS.denseNeighborCount,
+    )),
+  );
+  const minOffset = Math.max(
+    0.5,
+    finite(options.minOffset, COMPANION_DEFAULTS.minOffset),
+  );
+  const maxOffset = Math.max(
+    minOffset,
+    finite(options.maxOffset, COMPANION_DEFAULTS.maxOffset),
+  );
+  const minScale = Math.max(
+    0.05,
+    finite(options.minScale, COMPANION_DEFAULTS.minScale),
+  );
+  const maxScale = Math.max(
+    minScale,
+    finite(options.maxScale, COMPANION_DEFAULTS.maxScale),
+  );
+  const items = sourceItems.map((item) => ({
+    x: finite(item.x, 0),
+    z: finite(item.z, 0),
+  }));
+  const companions = items.map(() => []);
+  if (maxCompanions === 0 || items.length < 2) return companions;
+
+  const cellSize = neighborRadius;
+  const cells = new Map();
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    const cellX = Math.floor(item.x / cellSize);
+    const cellZ = Math.floor(item.z / cellSize);
+    const key = `${cellX}:${cellZ}`;
+    const cell = cells.get(key) ?? [];
+    cell.push(index);
+    cells.set(key, cell);
+  }
+
+  const radiusSq = neighborRadius * neighborRadius;
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    const cellX = Math.floor(item.x / cellSize);
+    const cellZ = Math.floor(item.z / cellSize);
+    const neighbors = [];
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const cell = cells.get(`${cellX + dx}:${cellZ + dz}`);
+        if (!cell) continue;
+        for (const neighborIndex of cell) {
+          if (neighborIndex === index) continue;
+          const neighbor = items[neighborIndex];
+          const deltaX = neighbor.x - item.x;
+          const deltaZ = neighbor.z - item.z;
+          const distanceSq = deltaX * deltaX + deltaZ * deltaZ;
+          if (distanceSq > radiusSq || distanceSq < 1) continue;
+          neighbors.push({
+            index: neighborIndex,
+            deltaX,
+            deltaZ,
+            distanceSq,
+          });
+        }
+      }
+    }
+    if (neighbors.length === 0) continue;
+    neighbors.sort((left, right) => (
+      left.distanceSq - right.distanceSq || left.index - right.index
+    ));
+
+    const targetCount = Math.min(
+      maxCompanions,
+      neighbors.length >= denseNeighborCount ? 2 : 1,
+    );
+    const selected = [neighbors[0]];
+    if (targetCount > 1) {
+      const first = neighbors[0];
+      const firstLength = Math.sqrt(first.distanceSq);
+      let best = null;
+      let bestScore = -Infinity;
+      for (let candidateIndex = 1; candidateIndex < neighbors.length; candidateIndex++) {
+        const candidate = neighbors[candidateIndex];
+        const candidateLength = Math.sqrt(candidate.distanceSq);
+        const directionDot = (
+          first.deltaX * candidate.deltaX + first.deltaZ * candidate.deltaZ
+        ) / (firstLength * candidateLength);
+        // Prefer a second corridor with a distinct silhouette direction, while
+        // retaining a small nearest-neighbor bias.
+        const score = (1 - directionDot) - candidateLength / neighborRadius * 0.12;
+        if (score > bestScore) {
+          bestScore = score;
+          best = candidate;
+        }
+      }
+      if (best) selected.push(best);
+    }
+
+    for (let companionIndex = 0; companionIndex < selected.length; companionIndex++) {
+      const neighbor = selected[companionIndex];
+      const distance = Math.sqrt(neighbor.distanceSq);
+      const directionX = neighbor.deltaX / distance;
+      const directionZ = neighbor.deltaZ / distance;
+      const progress = 0.28 + hash01(index, companionIndex * 7 + 1) * 0.14;
+      const corridorOffset = Math.min(
+        maxOffset,
+        distance * 0.46,
+        Math.max(minOffset, distance * progress),
+      );
+      if (corridorOffset < 1.35) continue;
+      const lateral = Math.min(1.15, distance * 0.075)
+        * (hash01(index, companionIndex * 7 + 2) * 2 - 1);
+      companions[index].push({
+        offsetX: directionX * corridorOffset - directionZ * lateral,
+        offsetZ: directionZ * corridorOffset + directionX * lateral,
+        scale: minScale
+          + (maxScale - minScale) * hash01(index, companionIndex * 7 + 3),
+        rotation: Math.PI * 2 * hash01(index, companionIndex * 7 + 4),
+      });
+    }
+  }
+  return companions;
+}
+
 /**
  * Build a reusable selector.
  *
@@ -152,6 +319,7 @@ export function createForestLodSelector(sourceItems, options = {}) {
     lodState: new Uint8Array(items.length), // 0 uninitialised, 1 near, 2 overview
     nearIndices: [],
     overviewIndices: [],
+    viewIndices: [],
     lastCameraPosition: null,
     lastCameraDirection: null,
     lastProjection: null,
@@ -235,6 +403,7 @@ export function selectForestLods(selector, camera, options = {}) {
     return {
       nearIndices: selector.nearIndices,
       overviewIndices: selector.overviewIndices,
+      viewIndices: selector.viewIndices,
       visibleCount: selector.nearIndices.length + selector.overviewIndices.length,
       culledCount: selector.items.length
         - selector.nearIndices.length
@@ -261,6 +430,7 @@ export function selectForestLods(selector, camera, options = {}) {
   const nearEnter = nearDistance - hysteresis;
   const nearExit = nearDistance + hysteresis;
   const visible = [];
+  const viewVisible = [];
 
   for (const cell of selector.cells) {
     _sphere.center.set(cell.x, cell.y, cell.z);
@@ -278,8 +448,10 @@ export function selectForestLods(selector, camera, options = {}) {
       const item = selector.items[index];
       _sphere.center.set(item.x, item.y, item.z);
       _sphere.radius = item.radius + padding;
+      const itemInView = frustum.intersectsSphere(_sphere);
+      if (itemInView) viewVisible.push(index);
       if (
-        frustum.intersectsSphere(_sphere)
+        itemInView
         || intersectsCasterBounds(
           item.x,
           item.z,
@@ -295,6 +467,7 @@ export function selectForestLods(selector, camera, options = {}) {
 
   // Stable order means a static camera never churns instance buffers.
   visible.sort((a, b) => a - b);
+  viewVisible.sort((a, b) => a - b);
   const near = [];
   const overview = [];
   for (const index of visible) {
@@ -312,17 +485,20 @@ export function selectForestLods(selector, camera, options = {}) {
 
   const changed = !selector.hasSelection
     || !sameIndices(near, selector.nearIndices)
-    || !sameIndices(overview, selector.overviewIndices);
+    || !sameIndices(overview, selector.overviewIndices)
+    || !sameIndices(viewVisible, selector.viewIndices);
   selector.hasSelection = true;
   if (changed) {
     selector.nearIndices = near;
     selector.overviewIndices = overview;
+    selector.viewIndices = viewVisible;
     selector.revision++;
   }
 
   return {
     nearIndices: selector.nearIndices,
     overviewIndices: selector.overviewIndices,
+    viewIndices: selector.viewIndices,
     visibleCount: selector.nearIndices.length + selector.overviewIndices.length,
     culledCount: selector.items.length
       - selector.nearIndices.length
@@ -334,3 +510,4 @@ export function selectForestLods(selector, camera, options = {}) {
 }
 
 export const FOREST_LOD_DEFAULTS = DEFAULTS;
+export const FOREST_COMPANION_DEFAULTS = COMPANION_DEFAULTS;
