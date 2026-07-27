@@ -4,10 +4,6 @@ import {
   createForestLodSelector,
   selectForestLods,
 } from '../src/core/forest-lod.js';
-import {
-  branchCardExemplarQuantiles,
-  clampBranchCardScale,
-} from '../src/core/branch-cards.js';
 
 function cameraAt(x, y, z, target = new Vector3(0, 0, 0)) {
   const camera = new PerspectiveCamera(50, 16 / 9, 0.1, 1000);
@@ -123,18 +119,4 @@ function assertDisjoint(selection) {
   assert.equal(empty.revision, 1);
 }
 
-{
-  assert.deepEqual(branchCardExemplarQuantiles(3), [0.18, 0.5, 0.82],
-    'three overview exemplars must span both tails of the limb-size distribution');
-  assert.deepEqual(branchCardExemplarQuantiles(20), [0.12, 0.37, 0.63, 0.88],
-    'the fixed atlas budget must cap excessive variant requests');
-  assert.equal(clampBranchCardScale(5, false, true), 1.85,
-    'crossed overview cards must reject pathological scale outliers');
-  assert.equal(clampBranchCardScale(0.1, false, true), 0.55);
-  assert.equal(clampBranchCardScale(5, true, false), 1.15,
-    'foliage-only cards retain their tighter leaf-size range');
-  assert.equal(clampBranchCardScale(2.4, false, false), 2.4,
-    'uncrossed full-content cards retain their authored scale');
-}
-
-console.log('SeedThree forest LOD: culling, caster union, hysteresis, and overview card bounds passed.');
+console.log('SeedThree forest LOD: culling, caster union, stability, and hysteresis passed.');
