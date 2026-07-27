@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node scripts/test-forest-lod.mjs",
+    "test": "node --test scripts/test-forest-lod.mjs scripts/test-overview-branch-cards.mjs",
     "preview": "vite preview --port 5390"
   },
   "dependencies": {

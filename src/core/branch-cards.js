@@ -42,6 +42,20 @@ function stemArcLen(stem) {
   return l;
 }
 
+export function branchCardExemplarQuantiles(variantCount) {
+  const count = Math.max(1, Math.min(4, Math.floor(Number.isFinite(variantCount) ? variantCount : 3)));
+  if (count === 1) return [0.5];
+  if (count === 2) return [0.25, 0.75];
+  if (count === 3) return [0.18, 0.5, 0.82];
+  return [0.12, 0.37, 0.63, 0.88];
+}
+
+export function clampBranchCardScale(scale, foliageOnly, crossed) {
+  if (foliageOnly) return Math.min(1.15, Math.max(0.75, scale));
+  if (crossed) return Math.min(1.85, Math.max(0.55, scale));
+  return scale;
+}
+
 // Rebase a stem into card-local space: base at the origin, chord along +Y —
 // the same frame the card quad and its placement transform use.
 function rebaseStem(stem) {
@@ -178,7 +192,12 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
   // Exemplars from spread ARC-length percentiles — variety without atlas bloat.
   // (Arc length, not chord — the chord collapses on curved twigs; see stemArcLen.)
   const sorted = [...roots].sort((a, b) => stemArcLen(a) - stemArcLen(b));
-  const picks = [0.25, 0.45, 0.65, 0.85].slice(0, Math.min(variantCount, 4))
+  // Span the WHOLE size distribution. The old 3-variant path accidentally took
+  // 25/45/65 percentiles (it merely sliced the 4-variant list), leaving the
+  // largest third of whole-limb roots to scale a mid-sized card by 3-5×. In an
+  // overview forest those outliers became screen-sized diamonds. Symmetric
+  // quantiles keep nearest-exemplar scale close to one at every atlas budget.
+  const picks = branchCardExemplarQuantiles(variantCount)
     .map((f) => sorted[Math.floor(f * (sorted.length - 1))]);
 
   const centerUniform = uniform(new Vector3());
@@ -349,7 +368,11 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
       // spread). Leaf size is sacred; a slightly short/long leaf run along the
       // twig is invisible next to wrong-sized leaves.
       let s = (refLen / variant.chordLen) * grow;
-      if (cards.foliageOnly) s = Math.min(1.15, Math.max(0.75, s));
+      // A crossed full-content card replaces an entire limb (mobile LOD4). Even
+      // with representative quantiles, pathological procedural outliers can
+      // dwarf every exemplar. A conservative cap protects the far silhouette
+      // from giant quads while preserving almost a 3.4× natural size range.
+      s = clampBranchCardScale(s, !!cards.foliageOnly, copies > 1);
       scl.set(s, s, s);
       for (let ci = 0; ci < copies; ci++) { // crossed pair: twin at 90°
         qRoll.setFromAxisAngle(Y, roll + ci * Math.PI / 2);
@@ -383,8 +406,11 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
 // belonged to one giant canopy centred on the hero (the lighting mismatch).
 // Cached per source material so rebuilds don't recompile.
 const forestMats = new WeakMap();
-export function forestCardMaterial(srcMat) {
-  let mat = forestMats.get(srcMat);
+const overviewForestMats = new WeakMap();
+export function forestCardMaterial(srcMat, opts = {}) {
+  const overview = !!opts.overview;
+  const cache = overview ? overviewForestMats : forestMats;
+  let mat = cache.get(srcMat);
   if (mat) return mat;
   mat = new MeshSSSNodeMaterial({
     map: srcMat.map, normalMap: srcMat.normalMap, roughnessMap: srcMat.roughnessMap,
@@ -406,12 +432,16 @@ export function forestCardMaterial(srcMat) {
   const dtMap = srcMat.userData.gltfDiffuseTransmission?.map;
   mat.thicknessColorNode = (dtMap ? texture(dtMap).r : uniform(1)).mul(attribute('aThickness', 'float')).mul(transmit);
   mat.thicknessDistortionNode = uniform(0.3);
-  mat.thicknessAmbientNode = uniform(0.16);
+  mat.thicknessAmbientNode = uniform(overview ? 0.12 : 0.16);
   mat.thicknessAttenuationNode = uniform(1.0);
   mat.thicknessPowerNode = uniform(6.0);
-  mat.thicknessScaleNode = uniform(3.0);
+  // Whole-limb overview cards overlap far more leaf mass per quad than twig
+  // cards. Reusing the near-card transmission strength stacks into blown-out
+  // white crowns under low-angle sun. Keep a restrained scatter response while
+  // retaining enough translucency to read as foliage rather than cardboard.
+  mat.thicknessScaleNode = uniform(overview ? 0.72 : 3.0);
   mat.positionNode = foliageWindPosition();
-  forestMats.set(srcMat, mat);
+  cache.set(srcMat, mat);
   return mat;
 }
 
@@ -423,6 +453,7 @@ export function disposeBranchCards(cards) {
     for (const variant of set.variants) {
       for (const tex of Object.values(variant.textures)) tex.dispose();
       forestMats.get(variant.material)?.dispose(); // forest twin shares the maps
+      overviewForestMats.get(variant.material)?.dispose();
       variant.material.dispose();
       variant.geometry.dispose();
     }
