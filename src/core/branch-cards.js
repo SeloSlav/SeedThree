@@ -18,7 +18,7 @@ import {
   OrthographicCamera, Box3, Vector3, Quaternion, Matrix4, Color, DoubleSide, MeshSSSNodeMaterial,
 } from 'three/webgpu';
 import {
-  texture, uniform, positionWorld, attribute, cameraViewMatrix, vec3, vec4, float, mix,
+  texture, uniform, positionWorld, attribute, cameraViewMatrix, vec3, vec4, float, mix, luminance,
 } from 'three/tsl';
 import { Rng } from './rng.js';
 import { generateSkeleton } from './weber-penn.js';
@@ -383,8 +383,14 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
 // belonged to one giant canopy centred on the hero (the lighting mismatch).
 // Cached per source material so rebuilds don't recompile.
 const forestMats = new WeakMap();
-export function forestCardMaterial(srcMat) {
-  let mat = forestMats.get(srcMat);
+export function forestCardMaterial(srcMat, opts = {}) {
+  const cacheKey = opts.seasonalDeciduous ? 'seasonal' : 'standard';
+  let variants = forestMats.get(srcMat);
+  if (!variants) {
+    variants = new Map();
+    forestMats.set(srcMat, variants);
+  }
+  let mat = variants.get(cacheKey);
   if (mat) return mat;
   mat = new MeshSSSNodeMaterial({
     map: srcMat.map, normalMap: srcMat.normalMap, roughnessMap: srcMat.roughnessMap,
@@ -401,18 +407,50 @@ export function forestCardMaterial(srcMat) {
   const sunFacing = base.normalize().dot(sunDirectionUniform).mul(0.5).add(0.5);
   const analytic = sunFacing.pow(1.4).mul(0.78).add(0.22);
   const occl = mix(float(1), analytic, treeOrigin.xz.length().smoothstep(float(60), float(90)));
-  mat.colorNode = texture(srcMat.map).mul(vec4(occl, occl, occl, 1));
+  const texel = texture(srcMat.map);
+  let seasonalRetain = float(1);
+  if (opts.seasonalDeciduous) {
+    // Branch-card bakes contain both green leaf pixels and, on collapsed LODs,
+    // brown twig pixels. Key dormancy off green dominance rather than fading the
+    // complete card: winter drops the leaves while keeping the baked structural
+    // twigs legible. The uniform changes only when the host changes season.
+    const dormancy = uniform(0);
+    const greenDominance = texel.g.sub(texel.r.max(texel.b));
+    const leafMask = greenDominance.smoothstep(float(0.015), float(0.08));
+    const dormantMask = leafMask.mul(dormancy);
+    const value = luminance(texel.rgb);
+    const dormantEdge = vec3(value.mul(1.08), value.mul(0.82), value.mul(0.58)).clamp(0, 1);
+    seasonalRetain = float(1).sub(dormantMask);
+    mat.colorNode = mix(texel.rgb, dormantEdge, dormantMask).mul(occl);
+    mat.opacityNode = texel.a.mul(seasonalRetain);
+    mat.userData.forestSeasonalDormancy = dormancy;
+  } else {
+    mat.colorNode = texel.mul(vec4(occl, occl, occl, 1));
+  }
   const transmit = uniform(new Color().setRGB(...TRANSMIT));
   const dtMap = srcMat.userData.gltfDiffuseTransmission?.map;
-  mat.thicknessColorNode = (dtMap ? texture(dtMap).r : uniform(1)).mul(attribute('aThickness', 'float')).mul(transmit);
+  mat.thicknessColorNode = (dtMap ? texture(dtMap).r : uniform(1))
+    .mul(attribute('aThickness', 'float'))
+    .mul(seasonalRetain)
+    .mul(transmit);
   mat.thicknessDistortionNode = uniform(0.3);
   mat.thicknessAmbientNode = uniform(0.16);
   mat.thicknessAttenuationNode = uniform(1.0);
   mat.thicknessPowerNode = uniform(6.0);
   mat.thicknessScaleNode = uniform(3.0);
   mat.positionNode = foliageWindPosition();
-  forestMats.set(srcMat, mat);
+  variants.set(cacheKey, mat);
   return mat;
+}
+
+/** Updates a forest card's deciduous dormancy uniform without rebuilding it. */
+export function setForestCardDormancy(material, amount) {
+  const dormancy = material?.userData?.forestSeasonalDormancy;
+  if (!dormancy) return false;
+  const next = Math.max(0, Math.min(1, Number.isFinite(amount) ? amount : 0));
+  if (dormancy.value === next) return false;
+  dormancy.value = next;
+  return true;
 }
 
 export function disposeBranchCards(cards) {
@@ -422,7 +460,11 @@ export function disposeBranchCards(cards) {
   for (const set of sets) {
     for (const variant of set.variants) {
       for (const tex of Object.values(variant.textures)) tex.dispose();
-      forestMats.get(variant.material)?.dispose(); // forest twin shares the maps
+      const cachedForestMaterials = forestMats.get(variant.material);
+      if (cachedForestMaterials) {
+        for (const material of cachedForestMaterials.values()) material.dispose();
+        forestMats.delete(variant.material);
+      }
       variant.material.dispose();
       variant.geometry.dispose();
     }
