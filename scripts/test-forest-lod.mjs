@@ -235,6 +235,16 @@ function assertDisjoint(selection) {
       + first.litter.length,
     'structural stats include the two sapling batches and every ecology instance',
   );
+  const saplingCrowns = layer.group.getObjectByName(
+    'SeedThree ecology clustered sapling crowns',
+  );
+  assert.ok(saplingCrowns?.isInstancedMesh,
+    'young-fir crowns remain one instanced draw');
+  assert.equal(
+    saplingCrowns.geometry.index.count / 3,
+    40,
+    'young-fir crowns use three asymmetric low-sided tiers instead of one cone',
+  );
   assert.ok(layer.stats.triangles > 0 && layer.stats.triangles < 20_000,
     'the complete edge ecology must remain a low-triangle overlay');
   layer.group.traverse((object) => {

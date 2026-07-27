@@ -410,6 +410,25 @@ function createIrregularUnderstoryGeometry() {
   return mergeStaticGeometries([central, left, right, rear]);
 }
 
+function createYoungFirCrownGeometry() {
+  const lower = new ConeGeometry(1.02, 1.55, 7);
+  lower.scale(1, 1, 0.9);
+  lower.rotateY(0.18);
+  lower.translate(-0.06, 2.05, 0.04);
+
+  const middle = new ConeGeometry(0.8, 1.45, 7);
+  middle.scale(0.94, 1, 1.04);
+  middle.rotateY(-0.31);
+  middle.translate(0.09, 2.82, -0.06);
+
+  const leader = new ConeGeometry(0.56, 1.35, 6);
+  leader.scale(1.02, 1, 0.9);
+  leader.rotateY(0.47);
+  leader.translate(-0.05, 3.5, 0.08);
+
+  return mergeStaticGeometries([lower, middle, leader]);
+}
+
 function createMeadowEdgeClumpGeometry() {
   const positions = [];
   const uvs = [];
@@ -477,8 +496,7 @@ export function buildForestEdgeEcology(ecology, options = {}) {
   if (ecology.saplings.length > 0) {
     const trunkGeometry = new CylinderGeometry(0.11, 0.17, 2.55, 6);
     trunkGeometry.translate(0, 1.275, 0);
-    const crownGeometry = new ConeGeometry(0.92, 2.7, 7);
-    crownGeometry.translate(0, 2.72, 0);
+    const crownGeometry = createYoungFirCrownGeometry();
     const trunks = createStaticInstances(
       'SeedThree ecology sapling trunks',
       trunkGeometry,
