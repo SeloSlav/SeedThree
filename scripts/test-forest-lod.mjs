@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
-import { PerspectiveCamera, Vector3 } from 'three/webgpu';
+import { PerspectiveCamera, StaticDrawUsage, Vector3 } from 'three/webgpu';
 import {
   createForestCanopyCompanions,
   createForestLodSelector,
   selectForestLods,
 } from '../src/core/forest-lod.js';
+import {
+  buildForestEdgeEcology,
+  createForestEdgeEcology,
+} from '../src/core/forest-ecology.js';
 
 function cameraAt(x, y, z, target = new Vector3(0, 0, 0)) {
   const camera = new PerspectiveCamera(50, 16 / 9, 0.1, 1000);
@@ -158,6 +162,79 @@ function assertDisjoint(selection) {
         'companion scale must stay in the configured understorey band');
     }
   }
+}
+
+{
+  const source = [];
+  for (let ring = 0; ring < 4; ring++) {
+    const radius = 58 + ring * 12;
+    for (let index = 0; index < 18; index++) {
+      const angle = index / 18 * Math.PI * 2 + ring * 0.08;
+      source.push({
+        x: Math.cos(angle) * radius,
+        z: Math.sin(angle) * radius,
+      });
+    }
+  }
+  source.push({ x: 12, z: 4 });
+  source.push({ x: 260, z: 260 });
+  const before = structuredClone(source);
+  const blocked = (x, z) => x > 50 && z > -8 && z < 8;
+  const options = {
+    protectedRadius: 50,
+    outerRadius: 125,
+    neighborRadius: 28,
+    minimumNeighbors: 2,
+    minimumAnchorSpacing: 8,
+    maxAnchors: 32,
+    maxSaplings: 24,
+    maxUnderstory: 48,
+    maxDeadwood: 10,
+    maxLitter: 48,
+    isBlockedAt: blocked,
+  };
+  const first = createForestEdgeEcology(source, options);
+  const repeat = createForestEdgeEcology(source, options);
+  assert.deepEqual(first, repeat, 'clearing-edge ecology must be deterministic');
+  assert.deepEqual(source, before, 'ecology derivation must not mutate gameplay sources');
+  assert.ok(first.anchorCount <= 32, 'anchor count must respect its hard cap');
+  assert.ok(first.saplings.length <= 24, 'saplings must respect their hard cap');
+  assert.ok(first.understory.length <= 48, 'understory must respect its hard cap');
+  assert.ok(first.deadwood.length <= 10, 'deadwood must respect its hard cap');
+  assert.ok(first.litter.length <= 48, 'litter must respect its hard cap');
+  for (const kind of ['saplings', 'understory', 'deadwood', 'litter']) {
+    for (const placement of first[kind]) {
+      assert.ok(Math.hypot(placement.x, placement.z) >= 50,
+        `${kind} must not enter the protected meadow`);
+      assert.ok(!blocked(placement.x, placement.z),
+        `${kind} must respect consumer blocked-area exclusions`);
+      assert.ok(Number.isInteger(placement.sourceIndex),
+        `${kind} keeps source provenance without becoming a gameplay tree`);
+    }
+  }
+
+  const layer = buildForestEdgeEcology(first, {
+    getHeightAt: (x, z) => x * 0.001 - z * 0.002,
+  });
+  assert.equal(layer.stats.draws, 5, 'all ecology renders in five static instance batches');
+  assert.equal(
+    layer.stats.instances,
+    first.saplings.length * 2
+      + first.understory.length
+      + first.deadwood.length
+      + first.litter.length,
+    'structural stats include the two sapling batches and every ecology instance',
+  );
+  assert.ok(layer.stats.triangles > 0 && layer.stats.triangles < 20_000,
+    'the complete edge ecology must remain a low-triangle overlay');
+  layer.group.traverse((object) => {
+    if (!object.isInstancedMesh) return;
+    assert.equal(object.instanceMatrix.usage, StaticDrawUsage,
+      'ecology matrices remain static and require no per-frame uploads');
+    assert.equal(object.userData.neverCastShadow, true,
+      'edge companions never enlarge the directional shadow workload');
+  });
+  layer.dispose();
 }
 
 console.log('SeedThree forest LOD: culling, caster union, stability, and hysteresis passed.');
