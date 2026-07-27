@@ -6,18 +6,19 @@
 // ownership of blocked-area and terrain-height sampling.
 
 import {
+  BufferGeometry,
   CircleGeometry,
   Color,
   ConeGeometry,
   CylinderGeometry,
   DoubleSide,
   Euler,
+  Float32BufferAttribute,
   Group,
   InstancedMesh,
   Matrix4,
   MeshStandardMaterial,
   Quaternion,
-  SphereGeometry,
   StaticDrawUsage,
   Vector3,
 } from 'three/webgpu';
@@ -309,6 +310,59 @@ function setColor(mesh, index, palette, variant) {
   mesh.setColorAt(index, new Color(palette[variant % palette.length]));
 }
 
+function mergeStaticGeometries(parts) {
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  let vertexOffset = 0;
+  for (const part of parts) {
+    const position = part.getAttribute('position');
+    const normal = part.getAttribute('normal');
+    const uv = part.getAttribute('uv');
+    for (let index = 0; index < position.count; index++) {
+      positions.push(position.getX(index), position.getY(index), position.getZ(index));
+      normals.push(normal.getX(index), normal.getY(index), normal.getZ(index));
+      uvs.push(uv.getX(index), uv.getY(index));
+    }
+    if (part.index) {
+      for (let index = 0; index < part.index.count; index++) {
+        indices.push(vertexOffset + part.index.getX(index));
+      }
+    } else {
+      for (let index = 0; index < position.count; index++) {
+        indices.push(vertexOffset + index);
+      }
+    }
+    vertexOffset += position.count;
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new Float32BufferAttribute(normals, 3));
+  geometry.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  for (const part of parts) part.dispose();
+  return geometry;
+}
+
+function createIrregularUnderstoryGeometry() {
+  const central = new ConeGeometry(0.78, 1.42, 5);
+  central.translate(0, 0.71, 0);
+  central.rotateY(0.18);
+  const left = new ConeGeometry(0.58, 1.08, 5);
+  left.translate(-0.52, 0.54, 0.12);
+  left.rotateY(-0.34);
+  const right = new ConeGeometry(0.54, 0.96, 5);
+  right.translate(0.5, 0.48, -0.22);
+  right.rotateY(0.52);
+  const rear = new ConeGeometry(0.43, 0.82, 5);
+  rear.translate(0.08, 0.41, 0.48);
+  rear.rotateY(-0.62);
+  return mergeStaticGeometries([central, left, right, rear]);
+}
+
 /**
  * Build five immutable instance batches from `createForestEdgeEcology` output.
  */
@@ -360,7 +414,7 @@ export function buildForestEdgeEcology(ecology, options = {}) {
       saplingMaterial,
       ecology.saplings.length,
     );
-    const crownPalette = [0x496b39, 0x3e5f35, 0x567442];
+    const crownPalette = [0x365239, 0x304735, 0x40583f];
     for (let index = 0; index < ecology.saplings.length; index++) {
       const item = ecology.saplings[index];
       position.set(item.x, getHeightAt(item.x, item.z), item.z);
@@ -378,7 +432,7 @@ export function buildForestEdgeEcology(ecology, options = {}) {
   }
 
   if (ecology.understory.length > 0) {
-    const geometry = new SphereGeometry(1, 7, 5);
+    const geometry = createIrregularUnderstoryGeometry();
     const material = understoryMaterial;
     const mesh = createStaticInstances(
       'SeedThree ecology beech-fir understory clusters',
@@ -386,12 +440,12 @@ export function buildForestEdgeEcology(ecology, options = {}) {
       material,
       ecology.understory.length,
     );
-    const palette = [0x385a32, 0x42643a, 0x4b6a3b];
+    const palette = [0x2e4831, 0x354d36, 0x3b5339];
     for (let index = 0; index < ecology.understory.length; index++) {
       const item = ecology.understory[index];
-      position.set(item.x, getHeightAt(item.x, item.z) + 0.72 * item.scale, item.z);
+      position.set(item.x, getHeightAt(item.x, item.z) + 0.025, item.z);
       quaternion.setFromAxisAngle(Y_AXIS, item.rotation);
-      scale.set(1.22 * item.scale, 0.76 * item.scale, item.scale);
+      scale.set(1.08 * item.scale, 0.96 * item.scale, item.scale);
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(index, matrix);
       setColor(mesh, index, palette, item.variant);
