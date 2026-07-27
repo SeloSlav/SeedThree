@@ -18,7 +18,7 @@ import {
   OrthographicCamera, Box3, Vector3, Quaternion, Matrix4, Color, DoubleSide, MeshSSSNodeMaterial,
 } from 'three/webgpu';
 import {
-  texture, uniform, positionWorld, attribute, cameraViewMatrix, vec3, vec4, float, mix, luminance,
+  texture, uniform, positionWorld, attribute, cameraViewMatrix, vec3, vec4, float, mix, luminance, sin,
 } from 'three/tsl';
 import { Rng } from './rng.js';
 import { generateSkeleton } from './weber-penn.js';
@@ -384,7 +384,8 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
 // Cached per source material so rebuilds don't recompile.
 const forestMats = new WeakMap();
 export function forestCardMaterial(srcMat, opts = {}) {
-  const cacheKey = opts.seasonalDeciduous ? 'seasonal' : 'standard';
+  const tintKey = opts.canopyTint?.join(',') ?? 'none';
+  const cacheKey = `${opts.seasonalDeciduous ? 'seasonal' : 'standard'}:${tintKey}:${opts.toneVariation ?? 0}`;
   let variants = forestMats.get(srcMat);
   if (!variants) {
     variants = new Map();
@@ -409,6 +410,7 @@ export function forestCardMaterial(srcMat, opts = {}) {
   const occl = mix(float(1), analytic, treeOrigin.xz.length().smoothstep(float(60), float(90)));
   const texel = texture(srcMat.map);
   let seasonalRetain = float(1);
+  let surfaceColor = texel.rgb;
   if (opts.seasonalDeciduous) {
     // Branch-card bakes contain both green leaf pixels and, on collapsed LODs,
     // brown twig pixels. Key dormancy off green dominance rather than fading the
@@ -421,9 +423,27 @@ export function forestCardMaterial(srcMat, opts = {}) {
     const value = luminance(texel.rgb);
     const dormantEdge = vec3(value.mul(1.08), value.mul(0.82), value.mul(0.58)).clamp(0, 1);
     seasonalRetain = float(1).sub(dormantMask);
-    mat.colorNode = mix(texel.rgb, dormantEdge, dormantMask).mul(occl);
+    surfaceColor = mix(surfaceColor, dormantEdge, dormantMask);
     mat.opacityNode = texel.a.mul(seasonalRetain);
     mat.userData.forestSeasonalDormancy = dormancy;
+  }
+  if (opts.canopyTint || opts.toneVariation) {
+    // Overview crowns share one material per species. Reuse the existing
+    // per-instance tree origin for stable tonal breakup: this adds no attribute,
+    // buffer upload, texture sample, or draw. Species tint keeps needle proxies
+    // in the darker evergreen range instead of the bake's pale display green.
+    const tint = opts.canopyTint
+      ? vec3(opts.canopyTint[0], opts.canopyTint[1], opts.canopyTint[2])
+      : vec3(1, 1, 1);
+    const variation = opts.toneVariation
+      ? sin(treeOrigin.x.mul(0.73).add(treeOrigin.z.mul(1.17)))
+        .mul(float(opts.toneVariation))
+        .add(1)
+      : float(1);
+    mat.colorNode = surfaceColor.mul(tint).mul(occl).mul(variation);
+    if (!opts.seasonalDeciduous) mat.opacityNode = texel.a;
+  } else if (opts.seasonalDeciduous) {
+    mat.colorNode = surfaceColor.mul(occl);
   } else {
     mat.colorNode = texel.mul(vec4(occl, occl, occl, 1));
   }

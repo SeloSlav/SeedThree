@@ -5,7 +5,7 @@
 // view. This selector keeps the batching win while returning compact, stable
 // instance lists for:
 //   near     — SeedThree's silhouette-complete mobile LOD2 hybrid
-//   overview — SeedThree's crossed whole-limb LOD4 cards
+//   overview — SeedThree's branch-bearing, overlapping LOD3 twig cards
 //
 // The selector is deliberately render-only. It never changes source placement
 // arrays, collision state, or gameplay identity. Frustum padding keeps trees just
