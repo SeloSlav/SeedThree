@@ -186,6 +186,7 @@ function assertDisjoint(selection) {
     neighborRadius: 28,
     minimumNeighbors: 2,
     minimumAnchorSpacing: 8,
+    edgeBandWidth: 42,
     maxAnchors: 32,
     maxSaplings: 24,
     maxUnderstory: 48,
@@ -212,6 +213,15 @@ function assertDisjoint(selection) {
         `${kind} keeps source provenance without becoming a gameplay tree`);
     }
   }
+  for (const kind of ['saplings', 'understory', 'deadwood', 'litter']) {
+    const innerEdgeMembers = first[kind].filter(
+      (placement) => Math.hypot(placement.x, placement.z) <= 104,
+    );
+    assert.ok(
+      innerEdgeMembers.length >= Math.floor(first[kind].length * 0.72),
+      `${kind} must compose primarily inside the visible clearing-edge band`,
+    );
+  }
 
   const layer = buildForestEdgeEcology(first, {
     getHeightAt: (x, z) => x * 0.001 - z * 0.002,
@@ -234,6 +244,10 @@ function assertDisjoint(selection) {
     assert.equal(object.userData.neverCastShadow, true,
       'edge companions never enlarge the directional shadow workload');
   });
+  assert.ok(
+    layer.group.getObjectByName('SeedThree ecology meadow-edge herb clumps'),
+    'the fifth static ecology batch must provide a raised meadow-edge silhouette',
+  );
   layer.dispose();
 }
 

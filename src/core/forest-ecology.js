@@ -7,7 +7,6 @@
 
 import {
   BufferGeometry,
-  CircleGeometry,
   Color,
   ConeGeometry,
   CylinderGeometry,
@@ -121,6 +120,10 @@ export function createForestEdgeEcology(sourceItems, options = {}) {
     2,
     finite(options.minimumAnchorSpacing, DEFAULTS.minimumAnchorSpacing),
   );
+  const edgeBandWidth = Math.max(
+    12,
+    finite(options.edgeBandWidth, outerRadius - protectedRadius),
+  );
   const maxAnchors = Math.max(
     0,
     Math.floor(finite(options.maxAnchors, DEFAULTS.maxAnchors)),
@@ -151,7 +154,14 @@ export function createForestEdgeEcology(sourceItems, options = {}) {
       sourceIndex: index,
       radius,
       neighbors,
-      score: hash01(index, 503) + Math.min(8, neighbors) * 0.045,
+      score: hash01(index, 503) * 0.48
+        + Math.min(8, neighbors) * 0.042
+        + (
+          1 - Math.min(
+            1,
+            Math.max(0, radius - protectedRadius - 4) / edgeBandWidth,
+          )
+        ) * 1.85,
     });
   }
   candidates.sort((left, right) => (
@@ -179,51 +189,79 @@ export function createForestEdgeEcology(sourceItems, options = {}) {
     && Math.hypot(x, z) <= outerRadius + 8
     && !isBlockedAt(x, z)
   );
+  const sampleAllowed = (
+    centerX,
+    centerZ,
+    sourceIndex,
+    salt,
+    minSpread,
+    maxSpread,
+    attempts = 4,
+  ) => {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const angle = hash01(sourceIndex, salt + attempt * 11) * Math.PI * 2;
+      const spread = minSpread
+        + hash01(sourceIndex, salt + attempt * 11 + 1) * (maxSpread - minSpread);
+      const x = centerX + Math.cos(angle) * spread;
+      const z = centerZ + Math.sin(angle) * spread;
+      if (allowed(x, z)) return { x, z, angle };
+    }
+    return null;
+  };
 
   for (let anchorIndex = 0; anchorIndex < anchors.length; anchorIndex++) {
     const anchor = anchors[anchorIndex];
     const radius = Math.max(1, anchor.radius);
-    const inwardX = -anchor.x / radius;
-    const inwardZ = -anchor.z / radius;
-    const tangentX = -inwardZ;
-    const tangentZ = inwardX;
-    const inward = 1.8 + hash01(anchor.sourceIndex, 601) * 3.8;
-    const lateral = (hash01(anchor.sourceIndex, 602) * 2 - 1) * 3.1;
-    const centerX = anchor.x + inwardX * inward + tangentX * lateral;
-    const centerZ = anchor.z + inwardZ * inward + tangentZ * lateral;
+    const outwardX = anchor.x / radius;
+    const outwardZ = anchor.z / radius;
+    const tangentX = -outwardZ;
+    const tangentZ = outwardX;
+    const edgeDepth = Math.pow(hash01(anchor.sourceIndex, 601), 1.65);
+    const edgeRadius = protectedRadius + 5 + edgeDepth * edgeBandWidth;
+    const lateral = (hash01(anchor.sourceIndex, 602) * 2 - 1) * 4.6;
+    const centerX = outwardX * edgeRadius + tangentX * lateral;
+    const centerZ = outwardZ * edgeRadius + tangentZ * lateral;
     const variant = Math.floor(hash01(anchor.sourceIndex, 603) * 3);
 
     if (
       ecology.saplings.length < limits.saplings
-      && hash01(anchor.sourceIndex, 604) < 0.86
-      && allowed(centerX, centerZ)
     ) {
-      ecology.saplings.push({
-        x: centerX,
-        z: centerZ,
-        scale: 0.72 + hash01(anchor.sourceIndex, 605) * 0.58,
-        rotation: hash01(anchor.sourceIndex, 606) * Math.PI * 2,
-        variant,
-        sourceIndex: anchor.sourceIndex,
-      });
+      const placement = allowed(centerX, centerZ)
+        ? { x: centerX, z: centerZ }
+        : sampleAllowed(centerX, centerZ, anchor.sourceIndex, 604, 1.6, 5.4)
+          ?? (allowed(anchor.x, anchor.z) ? { x: anchor.x, z: anchor.z } : null);
+      if (placement) {
+        ecology.saplings.push({
+          x: placement.x,
+          z: placement.z,
+          scale: 0.94 + hash01(anchor.sourceIndex, 605) * 0.72,
+          rotation: hash01(anchor.sourceIndex, 606) * Math.PI * 2,
+          variant,
+          sourceIndex: anchor.sourceIndex,
+        });
+      }
     }
 
-    const understoryCount = anchor.neighbors >= 5 ? 3 : 2;
+    const understoryCount = 4;
     for (
       let member = 0;
       member < understoryCount && ecology.understory.length < limits.understory;
       member++
     ) {
-      const angle = hash01(anchor.sourceIndex, 620 + member * 3) * Math.PI * 2;
-      const spread = 1.4 + hash01(anchor.sourceIndex, 621 + member * 3) * 4.2;
-      const x = centerX + Math.cos(angle) * spread;
-      const z = centerZ + Math.sin(angle) * spread;
-      if (!allowed(x, z)) continue;
+      const placement = sampleAllowed(
+        centerX,
+        centerZ,
+        anchor.sourceIndex,
+        620 + member * 37,
+        1.4,
+        5.6,
+      );
+      if (!placement) continue;
       ecology.understory.push({
-        x,
-        z,
-        scale: 0.64 + hash01(anchor.sourceIndex, 622 + member * 3) * 0.7,
-        rotation: angle + hash01(anchor.sourceIndex, 623 + member * 3) * 0.6,
+        x: placement.x,
+        z: placement.z,
+        scale: 0.86 + hash01(anchor.sourceIndex, 622 + member * 3) * 0.82,
+        rotation: placement.angle + hash01(anchor.sourceIndex, 623 + member * 3) * 0.6,
         variant,
         sourceIndex: anchor.sourceIndex,
       });
@@ -231,17 +269,22 @@ export function createForestEdgeEcology(sourceItems, options = {}) {
 
     if (
       ecology.deadwood.length < limits.deadwood
-      && anchorIndex % 3 === 1
+      && anchorIndex % 2 === 1
     ) {
-      const angle = hash01(anchor.sourceIndex, 641) * Math.PI * 2;
-      const x = centerX + Math.cos(angle) * 2.2;
-      const z = centerZ + Math.sin(angle) * 2.2;
-      if (allowed(x, z)) {
+      const placement = sampleAllowed(
+        centerX,
+        centerZ,
+        anchor.sourceIndex,
+        641,
+        1.8,
+        4.4,
+      );
+      if (placement) {
         ecology.deadwood.push({
-          x,
-          z,
+          x: placement.x,
+          z: placement.z,
           length: 2.1 + hash01(anchor.sourceIndex, 642) * 2.2,
-          rotation: angle + hash01(anchor.sourceIndex, 643) * 1.3,
+          rotation: placement.angle + hash01(anchor.sourceIndex, 643) * 1.3,
           variant,
           sourceIndex: anchor.sourceIndex,
         });
@@ -250,19 +293,23 @@ export function createForestEdgeEcology(sourceItems, options = {}) {
 
     for (
       let member = 0;
-      member < 2 && ecology.litter.length < limits.litter;
+      member < 3 && ecology.litter.length < limits.litter;
       member++
     ) {
-      const angle = hash01(anchor.sourceIndex, 660 + member * 3) * Math.PI * 2;
-      const spread = 0.8 + hash01(anchor.sourceIndex, 661 + member * 3) * 4.6;
-      const x = centerX + Math.cos(angle) * spread;
-      const z = centerZ + Math.sin(angle) * spread;
-      if (!allowed(x, z)) continue;
+      const placement = sampleAllowed(
+        centerX,
+        centerZ,
+        anchor.sourceIndex,
+        660 + member * 41,
+        0.8,
+        5.4,
+      );
+      if (!placement) continue;
       ecology.litter.push({
-        x,
-        z,
+        x: placement.x,
+        z: placement.z,
         scale: 0.9 + hash01(anchor.sourceIndex, 662 + member * 3) * 1.45,
-        rotation: angle,
+        rotation: placement.angle,
         variant: (variant + member) % 3,
         sourceIndex: anchor.sourceIndex,
       });
@@ -363,6 +410,36 @@ function createIrregularUnderstoryGeometry() {
   return mergeStaticGeometries([central, left, right, rear]);
 }
 
+function createMeadowEdgeClumpGeometry() {
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+  for (let blade = 0; blade < 3; blade++) {
+    const angle = blade / 3 * Math.PI;
+    const sideX = Math.cos(angle) * 0.42;
+    const sideZ = Math.sin(angle) * 0.42;
+    const leanX = Math.sin(angle * 1.7 + 0.4) * 0.16;
+    const leanZ = Math.cos(angle * 1.3 - 0.2) * 0.13;
+    const offset = positions.length / 3;
+    positions.push(
+      -sideX, 0, -sideZ,
+      sideX, 0, sideZ,
+      sideX * 0.38 + leanX, 0.72 + blade * 0.08, sideZ * 0.38 + leanZ,
+      -sideX * 0.38 + leanX, 0.72 + blade * 0.08, -sideZ * 0.38 + leanZ,
+    );
+    uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+    indices.push(offset, offset + 1, offset + 2, offset, offset + 2, offset + 3);
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
 /**
  * Build five immutable instance batches from `createForestEdgeEcology` output.
  */
@@ -414,12 +491,12 @@ export function buildForestEdgeEcology(ecology, options = {}) {
       saplingMaterial,
       ecology.saplings.length,
     );
-    const crownPalette = [0x365239, 0x304735, 0x40583f];
+    const crownPalette = [0x456846, 0x395a40, 0x526f4c];
     for (let index = 0; index < ecology.saplings.length; index++) {
       const item = ecology.saplings[index];
       position.set(item.x, getHeightAt(item.x, item.z), item.z);
       quaternion.setFromAxisAngle(Y_AXIS, item.rotation);
-      scale.setScalar(item.scale);
+      scale.set(item.scale * 0.88, item.scale * 1.12, item.scale * 0.88);
       matrix.compose(position, quaternion, scale);
       trunks.setMatrixAt(index, matrix);
       crowns.setMatrixAt(index, matrix);
@@ -440,12 +517,12 @@ export function buildForestEdgeEcology(ecology, options = {}) {
       material,
       ecology.understory.length,
     );
-    const palette = [0x2e4831, 0x354d36, 0x3b5339];
+    const palette = [0x3c5b3b, 0x486641, 0x536f49];
     for (let index = 0; index < ecology.understory.length; index++) {
       const item = ecology.understory[index];
       position.set(item.x, getHeightAt(item.x, item.z) + 0.025, item.z);
       quaternion.setFromAxisAngle(Y_AXIS, item.rotation);
-      scale.set(1.08 * item.scale, 0.96 * item.scale, item.scale);
+      scale.set(1.2 * item.scale, 1.04 * item.scale, 1.08 * item.scale);
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(index, matrix);
       setColor(mesh, index, palette, item.variant);
@@ -456,7 +533,7 @@ export function buildForestEdgeEcology(ecology, options = {}) {
   }
 
   if (ecology.deadwood.length > 0) {
-    const geometry = new CylinderGeometry(0.16, 0.24, 1, 6);
+    const geometry = new CylinderGeometry(0.21, 0.3, 1, 6);
     const mesh = createStaticInstances(
       'SeedThree ecology windfall deadwood',
       geometry,
@@ -466,7 +543,7 @@ export function buildForestEdgeEcology(ecology, options = {}) {
     const palette = [0x5d4936, 0x6c5843, 0x4f4337];
     for (let index = 0; index < ecology.deadwood.length; index++) {
       const item = ecology.deadwood[index];
-      position.set(item.x, getHeightAt(item.x, item.z) + 0.19, item.z);
+      position.set(item.x, getHeightAt(item.x, item.z) + 0.24, item.z);
       quaternion.setFromEuler(new Euler(0, item.rotation, Math.PI * 0.5));
       scale.set(1, item.length, 1);
       matrix.compose(position, quaternion, scale);
@@ -479,20 +556,19 @@ export function buildForestEdgeEcology(ecology, options = {}) {
   }
 
   if (ecology.litter.length > 0) {
-    const geometry = new CircleGeometry(1, 7);
-    geometry.rotateX(-Math.PI * 0.5);
+    const geometry = createMeadowEdgeClumpGeometry();
     const mesh = createStaticInstances(
-      'SeedThree ecology leaf-litter islands',
+      'SeedThree ecology meadow-edge herb clumps',
       geometry,
       litterMaterial,
       ecology.litter.length,
     );
-    const palette = [0x584730, 0x66513a, 0x493f31];
+    const palette = [0x697047, 0x73784b, 0x59663f];
     for (let index = 0; index < ecology.litter.length; index++) {
       const item = ecology.litter[index];
-      position.set(item.x, getHeightAt(item.x, item.z) + 0.035, item.z);
+      position.set(item.x, getHeightAt(item.x, item.z) + 0.02, item.z);
       quaternion.setFromAxisAngle(Y_AXIS, item.rotation);
-      scale.set(item.scale * 1.35, 1, item.scale * 0.78);
+      scale.set(item.scale * 1.2, item.scale * 0.86, item.scale);
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(index, matrix);
       setColor(mesh, index, palette, item.variant);
