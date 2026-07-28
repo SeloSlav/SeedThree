@@ -411,22 +411,64 @@ function createIrregularUnderstoryGeometry() {
 }
 
 function createYoungFirCrownGeometry() {
-  const lower = new ConeGeometry(1.02, 1.55, 7);
-  lower.scale(1, 1, 0.9);
-  lower.rotateY(0.18);
-  lower.translate(-0.06, 2.05, 0.04);
+  const parts = [];
 
-  const middle = new ConeGeometry(0.8, 1.45, 7);
-  middle.scale(0.94, 1, 1.04);
-  middle.rotateY(-0.31);
-  middle.translate(0.09, 2.82, -0.06);
+  // Overlapping, offset whorls keep the young fir's conical read without one
+  // low-sided paper silhouette. Two vertical segments soften each tier's facet
+  // transition while distinct rotations prevent their edges from lining up.
+  const lower = new ConeGeometry(1.08, 1.02, 12, 2);
+  lower.scale(1, 1, 0.88);
+  lower.rotateY(0.16);
+  lower.translate(-0.08, 1.86, 0.05);
+  parts.push(lower);
 
-  const leader = new ConeGeometry(0.56, 1.35, 6);
-  leader.scale(1.02, 1, 0.9);
-  leader.rotateY(0.47);
-  leader.translate(-0.05, 3.5, 0.08);
+  const lowerMiddle = new ConeGeometry(0.93, 1.04, 11, 2);
+  lowerMiddle.scale(0.92, 1, 1.04);
+  lowerMiddle.rotateY(-0.27);
+  lowerMiddle.translate(0.09, 2.36, -0.08);
+  parts.push(lowerMiddle);
 
-  return mergeStaticGeometries([lower, middle, leader]);
+  const upper = new ConeGeometry(0.73, 1, 11, 2);
+  upper.scale(1.05, 1, 0.9);
+  upper.rotateY(0.43);
+  upper.translate(-0.04, 2.87, 0.07);
+  parts.push(upper);
+
+  const leader = new ConeGeometry(0.5, 1.16, 10, 2);
+  leader.scale(0.9, 1, 1.06);
+  leader.rotateY(-0.12);
+  leader.translate(0.04, 3.44, -0.03);
+  parts.push(leader);
+
+  // Broken lateral sprays protrude beyond the tier envelope at alternating
+  // whorls. Each is a small closed seven-sided cluster rooted at the leader;
+  // they add side-on branch rhythm and irregular negative spaces while all
+  // remaining part of the same merged, single-draw crown geometry.
+  const sprayWhorls = [
+    { y: 1.58, count: 4, length: 1.02, radius: 0.2, offset: 0.18, droop: -0.16 },
+    { y: 2.18, count: 3, length: 0.84, radius: 0.17, offset: 0.72, droop: -0.1 },
+    { y: 2.72, count: 3, length: 0.66, radius: 0.14, offset: 0.34, droop: -0.04 },
+  ];
+  const direction = new Vector3();
+  const orientation = new Quaternion();
+  for (const whorl of sprayWhorls) {
+    for (let index = 0; index < whorl.count; index++) {
+      const angle = whorl.offset + index / whorl.count * Math.PI * 2;
+      direction.set(Math.cos(angle), whorl.droop, Math.sin(angle)).normalize();
+      orientation.setFromUnitVectors(Y_AXIS, direction);
+      const spray = new ConeGeometry(whorl.radius, whorl.length, 7);
+      spray.scale(1, 1, 0.76);
+      spray.applyQuaternion(orientation);
+      spray.translate(
+        direction.x * whorl.length * 0.5,
+        whorl.y + direction.y * whorl.length * 0.5,
+        direction.z * whorl.length * 0.5,
+      );
+      parts.push(spray);
+    }
+  }
+
+  return mergeStaticGeometries(parts);
 }
 
 function createMeadowEdgeClumpGeometry() {
@@ -509,7 +551,7 @@ export function buildForestEdgeEcology(ecology, options = {}) {
       saplingMaterial,
       ecology.saplings.length,
     );
-    const crownPalette = [0x456846, 0x395a40, 0x526f4c];
+    const crownPalette = [0x2f5339, 0x274833, 0x385b3c];
     for (let index = 0; index < ecology.saplings.length; index++) {
       const item = ecology.saplings[index];
       position.set(item.x, getHeightAt(item.x, item.z), item.z);
