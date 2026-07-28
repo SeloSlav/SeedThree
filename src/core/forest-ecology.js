@@ -10,17 +10,27 @@ import {
   Color,
   ConeGeometry,
   CylinderGeometry,
+  DodecahedronGeometry,
   DoubleSide,
   Euler,
   Float32BufferAttribute,
   Group,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
   MeshStandardMaterial,
+  MeshStandardNodeMaterial,
   Quaternion,
   StaticDrawUsage,
   Vector3,
 } from 'three/webgpu';
+import {
+  attribute,
+  float,
+  mix,
+  uniform,
+  vec3,
+} from 'three/tsl';
 
 const DEFAULTS = Object.freeze({
   protectedRadius: 50,
@@ -335,6 +345,25 @@ function createMaterial(name, color, options = {}) {
   return material;
 }
 
+function createSeasonalUnderstoryMaterial() {
+  const material = new MeshStandardNodeMaterial({
+    color: 0xffffff,
+    roughness: 0.98,
+    metalness: 0,
+    alphaTest: 0.5,
+  });
+  material.name = 'SeedThree ecology seasonal understory';
+  const dormancy = uniform(0);
+  const seasonalLeaf = attribute('aSeasonalLeaf', 'float');
+  const deciduousInstance = attribute('aDeciduous', 'float');
+  const instanceTint = attribute('instanceColor', 'vec3');
+  const retain = float(1).sub(seasonalLeaf.mul(deciduousInstance).mul(dormancy));
+  material.colorNode = mix(vec3(0.29, 0.2, 0.13), instanceTint, seasonalLeaf);
+  material.opacityNode = retain;
+  material.userData.forestSeasonalDormancy = dormancy;
+  return material;
+}
+
 function createStaticInstances(name, geometry, material, count) {
   const mesh = new InstancedMesh(geometry, material, count);
   mesh.name = name;
@@ -361,16 +390,19 @@ function mergeStaticGeometries(parts) {
   const positions = [];
   const normals = [];
   const uvs = [];
+  const seasonalLeaves = [];
   const indices = [];
   let vertexOffset = 0;
   for (const part of parts) {
     const position = part.getAttribute('position');
     const normal = part.getAttribute('normal');
     const uv = part.getAttribute('uv');
+    const seasonalLeaf = part.userData.seasonalLeaf === true ? 1 : 0;
     for (let index = 0; index < position.count; index++) {
       positions.push(position.getX(index), position.getY(index), position.getZ(index));
       normals.push(normal.getX(index), normal.getY(index), normal.getZ(index));
       uvs.push(uv.getX(index), uv.getY(index));
+      seasonalLeaves.push(seasonalLeaf);
     }
     if (part.index) {
       for (let index = 0; index < part.index.count; index++) {
@@ -387,6 +419,7 @@ function mergeStaticGeometries(parts) {
   geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
   geometry.setAttribute('normal', new Float32BufferAttribute(normals, 3));
   geometry.setAttribute('uv', new Float32BufferAttribute(uvs, 2));
+  geometry.setAttribute('aSeasonalLeaf', new Float32BufferAttribute(seasonalLeaves, 1));
   geometry.setIndex(indices);
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
@@ -395,19 +428,50 @@ function mergeStaticGeometries(parts) {
 }
 
 function createIrregularUnderstoryGeometry() {
-  const central = new ConeGeometry(0.78, 1.42, 5);
-  central.translate(0, 0.71, 0);
-  central.rotateY(0.18);
-  const left = new ConeGeometry(0.58, 1.08, 5);
-  left.translate(-0.52, 0.54, 0.12);
-  left.rotateY(-0.34);
-  const right = new ConeGeometry(0.54, 0.96, 5);
-  right.translate(0.5, 0.48, -0.22);
-  right.rotateY(0.52);
-  const rear = new ConeGeometry(0.43, 0.82, 5);
-  rear.translate(0.08, 0.41, 0.48);
-  rear.rotateY(-0.62);
-  return mergeStaticGeometries([central, left, right, rear]);
+  const parts = [];
+  const twigTips = [
+    new Vector3(-0.5, 1.04, 0.08),
+    new Vector3(0.5, 0.92, -0.2),
+    new Vector3(0.12, 1.2, 0.37),
+    new Vector3(-0.18, 0.82, -0.42),
+    new Vector3(0.02, 1.42, -0.04),
+  ];
+  const twigBase = new Vector3(0, 0.04, 0);
+  const delta = new Vector3();
+  const midpoint = new Vector3();
+  const orientation = new Quaternion();
+  for (const tip of twigTips) {
+    delta.copy(tip).sub(twigBase);
+    const length = delta.length();
+    orientation.setFromUnitVectors(Y_AXIS, delta.normalize());
+    const twig = new CylinderGeometry(0.025, 0.055, length, 5);
+    twig.applyQuaternion(orientation);
+    midpoint.copy(twigBase).add(tip).multiplyScalar(0.5);
+    twig.translate(midpoint.x, midpoint.y, midpoint.z);
+    twig.userData.seasonalLeaf = false;
+    parts.push(twig);
+  }
+
+  // Rounded, offset dodecahedral lobes read as a broken shrub mass from every
+  // camera angle. They replace the old four five-sided cones that appeared as
+  // solid triangular miniature trees along the upper overview edge.
+  const lobes = [
+    { x: -0.42, y: 0.92, z: 0.06, sx: 0.66, sy: 0.64, sz: 0.57, ry: 0.18 },
+    { x: 0.43, y: 0.78, z: -0.18, sx: 0.61, sy: 0.55, sz: 0.63, ry: -0.34 },
+    { x: 0.06, y: 1.12, z: 0.29, sx: 0.58, sy: 0.63, sz: 0.54, ry: 0.51 },
+    { x: -0.13, y: 0.72, z: -0.37, sx: 0.53, sy: 0.48, sz: 0.58, ry: -0.61 },
+    { x: 0.02, y: 1.38, z: -0.04, sx: 0.48, sy: 0.56, sz: 0.46, ry: 0.29 },
+    { x: -0.62, y: 0.61, z: -0.2, sx: 0.43, sy: 0.39, sz: 0.47, ry: 0.78 },
+  ];
+  for (const lobe of lobes) {
+    const foliage = new DodecahedronGeometry(1, 0);
+    foliage.scale(lobe.sx, lobe.sy, lobe.sz);
+    foliage.rotateY(lobe.ry);
+    foliage.translate(lobe.x, lobe.y, lobe.z);
+    foliage.userData.seasonalLeaf = true;
+    parts.push(foliage);
+  }
+  return mergeStaticGeometries(parts);
 }
 
 function createYoungFirCrownGeometry() {
@@ -521,7 +585,7 @@ export function buildForestEdgeEcology(ecology, options = {}) {
   const saplingMaterial = createMaterial('SeedThree ecology sapling crowns', 0xffffff, {
     side: DoubleSide,
   });
-  const understoryMaterial = createMaterial('SeedThree ecology understory crowns', 0xffffff);
+  const understoryMaterial = createSeasonalUnderstoryMaterial();
   const deadwoodMaterial = createMaterial('SeedThree ecology deadwood', 0xffffff);
   const litterMaterial = createMaterial('SeedThree ecology leaf litter', 0xffffff, {
     side: DoubleSide,
@@ -577,7 +641,13 @@ export function buildForestEdgeEcology(ecology, options = {}) {
       material,
       ecology.understory.length,
     );
-    const palette = [0x3c5b3b, 0x486641, 0x536f49];
+    const deciduous = new InstancedBufferAttribute(
+      new Float32Array(ecology.understory.length),
+      1,
+    );
+    deciduous.setUsage(StaticDrawUsage);
+    geometry.setAttribute('aDeciduous', deciduous);
+    const palette = [0x304d34, 0x3b5738, 0x455f3f];
     for (let index = 0; index < ecology.understory.length; index++) {
       const item = ecology.understory[index];
       position.set(item.x, getHeightAt(item.x, item.z) + 0.025, item.z);
@@ -586,7 +656,11 @@ export function buildForestEdgeEcology(ecology, options = {}) {
       matrix.compose(position, quaternion, scale);
       mesh.setMatrixAt(index, matrix);
       setColor(mesh, index, palette, item.variant);
+      // Variant 0 is the evergreen fir constituent; the two broadleaf variants
+      // drop only their foliage lobes while retaining the merged woody twigs.
+      deciduous.setX(index, item.variant % 3 === 0 ? 0 : 1);
     }
+    deciduous.needsUpdate = true;
     finishInstances(mesh);
     group.add(mesh);
     meshes.push(mesh);
@@ -661,6 +735,13 @@ export function buildForestEdgeEcology(ecology, options = {}) {
   return {
     group,
     stats,
+    setDeciduousDormancy(amount) {
+      const dormancy = understoryMaterial.userData.forestSeasonalDormancy;
+      const next = Math.max(0, Math.min(1, Number.isFinite(amount) ? amount : 0));
+      if (!dormancy || dormancy.value === next) return false;
+      dormancy.value = next;
+      return true;
+    },
     dispose() {
       for (const mesh of meshes) {
         mesh.geometry.dispose();
