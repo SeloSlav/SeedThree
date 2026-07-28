@@ -356,9 +356,12 @@ function createSeasonalUnderstoryMaterial() {
   const dormancy = uniform(0);
   const seasonalLeaf = attribute('aSeasonalLeaf', 'float');
   const deciduousInstance = attribute('aDeciduous', 'float');
-  const instanceTint = attribute('instanceColor', 'vec3');
   const retain = float(1).sub(seasonalLeaf.mul(deciduousInstance).mul(dormancy));
-  material.colorNode = mix(vec3(0.29, 0.2, 0.13), instanceTint, seasonalLeaf);
+  // NodeMaterial automatically multiplies colorNode by its special
+  // `instanceColor` varying. Reading it as a generic geometry attribute resolves
+  // to zero because it lives on InstancedMesh, not geometry. Keep
+  // foliage white here so the authored palette is applied exactly once.
+  material.colorNode = mix(vec3(0.92, 0.78, 0.6), vec3(1), seasonalLeaf);
   material.opacityNode = retain;
   material.userData.forestSeasonalDormancy = dormancy;
   return material;

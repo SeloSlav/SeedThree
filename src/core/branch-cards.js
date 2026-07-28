@@ -5,10 +5,8 @@
 // A few exemplar terminal subtrees (twig cylinder + its real LOD0 leaf
 // instances, real leaf material) are rendered through the multichannel baker
 // into unlit material inputs (albedo/normal/rough/translucency). At LOD1+ every
-// terminal twig — cylinder AND leaves — is replaced by ONE compact card
-// instance using those bakes, placed with the branch's own frame. The terminal
-// collapse rung folds that card into a shallow cluster so overview crowns keep
-// depth without adding instances or draws. Because the
+// terminal twig — cylinder AND leaves — is replaced by ONE single-quad card
+// instance using those bakes, placed with the branch's own frame. Because the
 // card is literally a picture of the LOD0 tree relit by the same material
 // family, color/density/silhouette parity across the LOD switch is automatic.
 //
@@ -97,44 +95,12 @@ function rebaseSubtree(subtree, root) {
   }));
 }
 
-// Card spanning the bake framing, in the SAME stem-local space (origin = stem
-// base) so instance transforms are just (base position, chord rotation, scale).
-// Terminal full-content cards use one shallow folded surface plus a narrow
-// cross-fin. That keeps each authored twig as ONE instance while avoiding the
-// edge-on paper silhouettes that branchless overview companions exposed.
-export function createBranchCardGeometry(center, halfW, halfH, volumetric = false) {
+// Single quad spanning the bake framing, in the SAME stem-local space (origin =
+// stem base) so instance transforms are just (base position, chord rotation, scale).
+function cardQuadGeometry(center, halfW, halfH) {
   const geo = new BufferGeometry();
   const x0 = center.x - halfW, x1 = center.x + halfW;
   const y0 = center.y - halfH, y1 = center.y + halfH;
-  if (volumetric) {
-    const xm = center.x;
-    const depth = Math.max(0.025, Math.min(halfW * 0.34, halfH * 0.14));
-    const spineHalfWidth = halfW * 0.28;
-    geo.setAttribute('position', new BufferAttribute(new Float32Array([
-      // Folded left half.
-      x0, y0, 0, xm, y0, depth, xm, y1, depth, x0, y1, 0,
-      // Folded right half.
-      xm, y0, depth, x1, y0, 0, x1, y1, 0, xm, y1, depth,
-      // Narrow cross-fin using the central portion of the same bake.
-      xm, y0, -depth, xm, y0, depth, xm, y1, depth, xm, y1, -depth,
-    ]), 3));
-    geo.setAttribute('uv', new BufferAttribute(new Float32Array([
-      0, 0, 0.5, 0, 0.5, 1, 0, 1,
-      0.5, 0, 1, 0, 1, 1, 0.5, 1,
-      0.5 - spineHalfWidth / (halfW * 2), 0,
-      0.5 + spineHalfWidth / (halfW * 2), 0,
-      0.5 + spineHalfWidth / (halfW * 2), 1,
-      0.5 - spineHalfWidth / (halfW * 2), 1,
-    ]), 2));
-    geo.setIndex([
-      0, 1, 2, 0, 2, 3,
-      4, 5, 6, 4, 6, 7,
-      8, 9, 10, 8, 10, 11,
-    ]);
-    geo.computeVertexNormals();
-    geo.userData.volumetricCard = true;
-    return geo;
-  }
   geo.setAttribute('position', new BufferAttribute(new Float32Array([
     x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y1, 0,
   ]), 3));
@@ -273,11 +239,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     twigGeo?.dispose();
     if (leaves) leaves.geometry.dispose();
 
-    // LOD3 is the full-content terminal collapse. Give those single cards
-    // shallow volume; LOD2 foliage-only cards retain their real twig tubes, and
-    // LOD4 whole-limb cards already use crossed instances.
-    const volumetric = !opts.foliageOnly && cardLevel === maxLevel;
-    const geometry = createBranchCardGeometry(center, halfW, halfH, volumetric);
+    const geometry = cardQuadGeometry(center, halfW, halfH);
     geometry.userData.shared = true; // disposeTree must NOT free cached card geometry
     addThicknessAttribute(geometry, MAX_CARD_INSTANCES, thicknessRng);
     // per-instance wind heading×weight + anchor point (sway phase) — values
