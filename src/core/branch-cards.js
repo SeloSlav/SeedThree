@@ -18,7 +18,7 @@ import {
   OrthographicCamera, Box3, Vector3, Quaternion, Matrix4, Color, DoubleSide, MeshSSSNodeMaterial,
 } from 'three/webgpu';
 import {
-  texture, uniform, positionWorld, attribute, cameraViewMatrix, vec3, vec4, float, mix, luminance, sin,
+  texture, uniform, positionWorld, attribute, cameraViewMatrix, vec3, vec4, float, mix, luminance, sin, step,
 } from 'three/tsl';
 import { Rng } from './rng.js';
 import { generateSkeleton } from './weber-penn.js';
@@ -29,6 +29,7 @@ import { foliageWindPosition, sunDirectionUniform, WIND_DIR } from './wind.js';
 
 const MAX_CARD_INSTANCES = 4096; // aThickness allocation on the shared geometry
 const TRANSMIT = [0.42, 0.62, 0.24];
+const SEASONAL_TREE_ORIGIN_Y_OFFSET = 2048;
 
 const chordVec = (stem, out) =>
   out.copy(stem.points[stem.points.length - 1]).sub(stem.points[0]);
@@ -385,7 +386,8 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
 const forestMats = new WeakMap();
 export function forestCardMaterial(srcMat, opts = {}) {
   const tintKey = opts.canopyTint?.join(',') ?? 'none';
-  const cacheKey = `${opts.seasonalDeciduous ? 'seasonal' : 'standard'}:${tintKey}:${opts.toneVariation ?? 0}`;
+  const autumnKey = opts.autumnColor?.join(',') ?? 'none';
+  const cacheKey = `${opts.seasonalDeciduous ? 'seasonal' : 'standard'}:${tintKey}:${autumnKey}:${opts.toneVariation ?? 0}`;
   let variants = forestMats.get(srcMat);
   if (!variants) {
     variants = new Map();
@@ -397,14 +399,22 @@ export function forestCardMaterial(srcMat, opts = {}) {
     map: srcMat.map, normalMap: srcMat.normalMap, roughnessMap: srcMat.roughnessMap,
     alphaTest: srcMat.alphaTest, side: DoubleSide, roughness: 1.0, metalness: 0.0,
   });
-  const base = positionWorld.sub(attribute('aTreeOrigin', 'vec3')).normalize().add(vec3(0, 0.45, 0));
+  // The deciduous instance bit rides in aTreeOrigin.y because forest cards
+  // already consume WebGPU's portable maximum of eight vertex buffers.
+  const packedTreeOrigin = attribute('aTreeOrigin', 'vec3');
+  const deciduousInstance = step(float(1024), packedTreeOrigin.y);
+  const treeOrigin = vec3(
+    packedTreeOrigin.x,
+    packedTreeOrigin.y.sub(deciduousInstance.mul(SEASONAL_TREE_ORIGIN_Y_OFFSET)),
+    packedTreeOrigin.z,
+  );
+  const base = positionWorld.sub(treeOrigin).normalize().add(vec3(0, 0.45, 0));
   const detail = srcMat.normalMap ? texture(srcMat.normalMap).xyz.mul(2).sub(1) : vec3(0, 0, 0);
   const nWorld = base.add(detail.mul(0.45)).normalize();
   mat.normalNode = cameraViewMatrix.mul(vec4(nWorld, 0)).xyz.normalize();
   // Trees INSIDE the shadow frustum (world r < ~74) self-shadow with the real
   // map; beyond it no shadows exist, so the analytic sun-occlusion fades in by
   // world radius to carry the same look — one material, both regimes.
-  const treeOrigin = attribute('aTreeOrigin', 'vec3');
   const sunFacing = base.normalize().dot(sunDirectionUniform).mul(0.5).add(0.5);
   const analytic = sunFacing.pow(1.4).mul(0.78).add(0.22);
   const occl = mix(float(1), analytic, treeOrigin.xz.length().smoothstep(float(60), float(90)));
@@ -415,8 +425,11 @@ export function forestCardMaterial(srcMat, opts = {}) {
   if (opts.seasonalDeciduous) {
     // Branch-card bakes contain both green leaf pixels and, on collapsed LODs,
     // brown twig pixels. Key dormancy off green dominance rather than fading the
-    // complete card: winter drops the leaves while keeping the baked structural
-    // twigs legible. The uniform changes only when the host changes season.
+    // complete card: seasonal color and winter leaf drop affect only leaf
+    // pixels on tree instances explicitly marked deciduous, retaining both the
+    // baked structural twigs and evergreens sharing a larch proxy material.
+    const springFlush = uniform(0);
+    const autumnColor = uniform(0);
     const dormancy = uniform(0);
     const greenDominance = texel.g.sub(texel.r.max(texel.b));
     const greenLeafMask = greenDominance.smoothstep(float(0.015), float(0.08));
@@ -426,13 +439,28 @@ export function forestCardMaterial(srcMat, opts = {}) {
     const transmissionLeafMask = dtMap
       ? texture(dtMap).r.smoothstep(float(0.08), float(0.28))
       : float(0);
-    const leafMask = greenLeafMask.max(transmissionLeafMask);
-    const dormantMask = leafMask.mul(dormancy);
+    const leafMask = greenLeafMask.max(transmissionLeafMask).mul(deciduousInstance);
     const value = luminance(texel.rgb);
+    const springLeaf = vec3(0.72, 1, 0.32).mul(value.mul(1.25)).clamp(0, 1);
+    const autumnPalette = opts.autumnColor ?? [0.94, 0.48, 0.08];
+    const autumnLeaf = vec3(
+      autumnPalette[0],
+      autumnPalette[1],
+      autumnPalette[2],
+    ).mul(value.mul(1.45)).clamp(0, 1);
+    surfaceColor = mix(
+      surfaceColor,
+      springLeaf,
+      leafMask.mul(springFlush).mul(float(0.72)),
+    );
+    surfaceColor = mix(surfaceColor, autumnLeaf, leafMask.mul(autumnColor));
+    const dormantMask = leafMask.mul(dormancy);
     const dormantEdge = vec3(value.mul(1.08), value.mul(0.82), value.mul(0.58)).clamp(0, 1);
     seasonalRetain = float(1).sub(dormantMask);
     surfaceColor = mix(surfaceColor, dormantEdge, dormantMask);
     mat.opacityNode = texel.a.mul(seasonalRetain);
+    mat.userData.forestSeasonalSpringFlush = springFlush;
+    mat.userData.forestSeasonalAutumnColor = autumnColor;
     mat.userData.forestSeasonalDormancy = dormancy;
   }
   if (opts.canopyTint || opts.toneVariation) {
@@ -478,6 +506,32 @@ export function setForestCardDormancy(material, amount) {
   if (dormancy.value === next) return false;
   dormancy.value = next;
   return true;
+}
+
+/** Updates color and leaf retention without rebuilding geometry or materials. */
+export function setForestCardSeason(material, state = {}) {
+  const spring = material?.userData?.forestSeasonalSpringFlush;
+  const autumn = material?.userData?.forestSeasonalAutumnColor;
+  const dormancy = material?.userData?.forestSeasonalDormancy;
+  if (!spring || !autumn || !dormancy) return false;
+  const clamp = (value) => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+  const nextSpring = clamp(state.springFlush);
+  const nextAutumn = clamp(state.autumnColor);
+  const nextDormancy = clamp(state.dormancy);
+  let changed = false;
+  if (spring.value !== nextSpring) {
+    spring.value = nextSpring;
+    changed = true;
+  }
+  if (autumn.value !== nextAutumn) {
+    autumn.value = nextAutumn;
+    changed = true;
+  }
+  if (dormancy.value !== nextDormancy) {
+    dormancy.value = nextDormancy;
+    changed = true;
+  }
+  return changed;
 }
 
 export function disposeBranchCards(cards) {
