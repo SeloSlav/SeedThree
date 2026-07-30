@@ -1,5 +1,8 @@
 import { Matrix4 } from 'three/webgpu';
 
+export const DEFAULT_INSTANCE_MATRIX_WRITES_PER_CHUNK = 256;
+export const DEFAULT_INSTANCE_MATRIX_DEADLINE_CHECK_INTERVAL = 4;
+
 /**
  * Create an atomic, resumable branch/card instance compaction job.
  *
@@ -38,12 +41,14 @@ export function runInstanceMatrixWriteChunk(
 ) {
   const now = options.now ?? defaultNow;
   const startedAt = now();
-  const maxMatrixWrites = Number.isFinite(options.maxMatrixWrites)
-    ? Math.max(1, Math.floor(options.maxMatrixWrites))
-    : Number.POSITIVE_INFINITY;
+  const maxMatrixWrites = options.maxMatrixWrites === Number.POSITIVE_INFINITY
+    ? Number.POSITIVE_INFINITY
+    : Number.isFinite(options.maxMatrixWrites)
+      ? Math.max(1, Math.floor(options.maxMatrixWrites))
+      : DEFAULT_INSTANCE_MATRIX_WRITES_PER_CHUNK;
   const deadlineCheckInterval = Number.isFinite(options.deadlineCheckInterval)
     ? Math.max(1, Math.floor(options.deadlineCheckInterval))
-    : 16;
+    : DEFAULT_INSTANCE_MATRIX_DEADLINE_CHECK_INTERVAL;
   let matrixWrites = 0;
   let workUnits = 0;
 

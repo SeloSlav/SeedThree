@@ -9,6 +9,8 @@ import {
   Vector3,
 } from 'three/webgpu';
 import {
+  DEFAULT_INSTANCE_MATRIX_DEADLINE_CHECK_INTERVAL,
+  DEFAULT_INSTANCE_MATRIX_WRITES_PER_CHUNK,
   createInstanceMatrixWriteJob,
   runInstanceMatrixWriteChunk,
 } from '../src/core/instance-matrix-chunks.js';
@@ -122,7 +124,112 @@ assert.equal(treeOrigin.getY(0), 104, 'consumer metadata callback must populate 
 assert.equal(treeOrigin.getY(1), 5);
 assert.equal(near.cards[0].geometry.attributes.aWindVec.getY(0), 0.75);
 
-for (const set of [near, overview]) {
+const slicedSlots = Array.from(
+  { length: DEFAULT_INSTANCE_MATRIX_WRITES_PER_CHUNK + 1 },
+  (_, index) => ({
+    matrix: new Matrix4().makeTranslation(index, 0, 0),
+    pos: new Vector3(index, 0, 0),
+    enabled: true,
+  }),
+);
+const slicedNear = makeLodSet(slicedSlots.length);
+const slicedOverview = makeLodSet(slicedSlots.length);
+slicedNear.branches.count = 11;
+slicedNear.cards[0].count = 11;
+slicedOverview.branches.count = 5;
+slicedOverview.cards[0].count = 5;
+const slicedJob = createInstanceMatrixWriteJob(
+  slicedNear,
+  slicedOverview,
+  slicedSlots,
+  slicedSlots.map((_, index) => index),
+  [],
+);
+const defaultSlice = runInstanceMatrixWriteChunk(slicedJob, {
+  deadlineMs: Number.POSITIVE_INFINITY,
+});
+assert.equal(
+  defaultSlice.matrixWrites,
+  DEFAULT_INSTANCE_MATRIX_WRITES_PER_CHUNK,
+  'the reusable default must bound one matrix-write slice',
+);
+assert.equal(defaultSlice.completed, false);
+assert.equal(
+  slicedNear.branches.count,
+  11,
+  'an incomplete default slice must retain the previous live count',
+);
+assert.equal(slicedNear.cards[0].count, 11);
+assert.equal(slicedOverview.branches.count, 5);
+assert.equal(slicedOverview.cards[0].count, 5);
+let defaultSliceCalls = 1;
+while (!slicedJob.completed && defaultSliceCalls < 8) {
+  runInstanceMatrixWriteChunk(slicedJob, {
+    deadlineMs: Number.POSITIVE_INFINITY,
+  });
+  defaultSliceCalls++;
+}
+assert.equal(slicedJob.completed, true, 'default slices must converge');
+assert.equal(defaultSliceCalls, 3);
+assert.equal(slicedNear.branches.count, slicedSlots.length);
+assert.equal(slicedNear.cards[0].count, slicedSlots.length);
+assert.equal(slicedOverview.branches.count, 0);
+assert.equal(slicedOverview.cards[0].count, 0);
+const slicedLastMatrix = new Matrix4();
+slicedNear.cards[0].getMatrixAt(slicedSlots.length - 1, slicedLastMatrix);
+assert.equal(
+  slicedLastMatrix.elements[12],
+  slicedSlots.length - 1,
+  'default slices must preserve deterministic matrix output',
+);
+
+const deadlineNear = makeLodSet(16);
+const deadlineOverview = makeLodSet(16);
+deadlineNear.branches.count = 7;
+deadlineNear.cards[0].count = 7;
+deadlineOverview.branches.count = 3;
+deadlineOverview.cards[0].count = 3;
+const deadlineSlots = Array.from({ length: 16 }, (_, index) => ({
+  matrix: new Matrix4().makeTranslation(index, 0, 0),
+  pos: new Vector3(index, 0, 0),
+  enabled: true,
+}));
+const deadlineJob = createInstanceMatrixWriteJob(
+  deadlineNear,
+  deadlineOverview,
+  deadlineSlots,
+  deadlineSlots.map((_, index) => index),
+  [],
+);
+let deadlineNowMs = 0;
+const deadlineSlice = runInstanceMatrixWriteChunk(deadlineJob, {
+  deadlineMs: 0.5,
+  now: () => {
+    const sampled = deadlineNowMs;
+    deadlineNowMs += 0.3;
+    return sampled;
+  },
+});
+assert.equal(
+  deadlineSlice.matrixWrites,
+  DEFAULT_INSTANCE_MATRIX_DEADLINE_CHECK_INTERVAL * 2,
+  'the default deadline cadence must yield within two fine polling intervals',
+);
+assert.equal(deadlineSlice.completed, false);
+assert.equal(
+  deadlineNear.branches.count,
+  7,
+  'deadline-yielded CPU writes must not become partially visible',
+);
+
+for (const set of [
+  near,
+  overview,
+  slicedNear,
+  slicedOverview,
+  deadlineNear,
+  deadlineOverview,
+]) {
   set.branches.geometry.dispose();
   set.branches.material.dispose();
   for (const mesh of set.cards) {
