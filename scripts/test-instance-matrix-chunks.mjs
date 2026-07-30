@@ -13,6 +13,7 @@ import {
   DEFAULT_INSTANCE_MATRIX_WRITES_PER_CHUNK,
   createInstanceMatrixWriteJob,
   runInstanceMatrixWriteChunk,
+  runInstanceMatrixWriteSlices,
 } from '../src/core/instance-matrix-chunks.js';
 
 function makeLodSet(capacity) {
@@ -222,6 +223,98 @@ assert.equal(
   'deadline-yielded CPU writes must not become partially visible',
 );
 
+const multiSliceSlots = Array.from({ length: 193 }, (_, index) => ({
+  matrix: new Matrix4().makeTranslation(index, index % 7, 0),
+  pos: new Vector3(index, index % 7, 0),
+  enabled: true,
+}));
+const multiSliceNear = makeLodSet(multiSliceSlots.length);
+const multiSliceOverview = makeLodSet(multiSliceSlots.length);
+multiSliceNear.branches.count = 9;
+multiSliceNear.cards[0].count = 9;
+multiSliceOverview.branches.count = 4;
+multiSliceOverview.cards[0].count = 4;
+const multiSliceJob = createInstanceMatrixWriteJob(
+  multiSliceNear,
+  multiSliceOverview,
+  multiSliceSlots,
+  multiSliceSlots.map((_, index) => index),
+  [],
+);
+let multiSliceNowMs = 0;
+const multiSliceResult = runInstanceMatrixWriteSlices(multiSliceJob, {
+  deadlineMs: 10,
+  minimumChunkHeadroomMs: 0.1,
+  maxMatrixWritesPerChunk: 128,
+  now: () => {
+    const sampled = multiSliceNowMs;
+    multiSliceNowMs += 0.005;
+    return sampled;
+  },
+});
+assert.equal(multiSliceResult.completed, true);
+assert.equal(multiSliceResult.stopReason, 'converged');
+assert.equal(multiSliceResult.chunks, 4);
+assert.equal(multiSliceResult.matrixWrites, multiSliceSlots.length * 2);
+assert.equal(
+  multiSliceResult.maxMatrixWritesInChunk,
+  128,
+  'every fine matrix slice must retain the configured preemption bound',
+);
+assert.ok(
+  multiSliceResult.durationMs < 10,
+  'multiple fine chunks must converge before the hard deadline',
+);
+assert.equal(multiSliceNear.branches.count, multiSliceSlots.length);
+assert.equal(multiSliceNear.cards[0].count, multiSliceSlots.length);
+assert.equal(multiSliceOverview.branches.count, 0);
+assert.equal(multiSliceOverview.cards[0].count, 0);
+const multiSliceLastMatrix = new Matrix4();
+multiSliceNear.cards[0].getMatrixAt(
+  multiSliceSlots.length - 1,
+  multiSliceLastMatrix,
+);
+assert.equal(multiSliceLastMatrix.elements[12], multiSliceSlots.length - 1);
+
+const headroomSlots = Array.from({ length: 257 }, (_, index) => ({
+  matrix: new Matrix4().makeTranslation(index, 0, 0),
+  pos: new Vector3(index, 0, 0),
+  enabled: true,
+}));
+const headroomNear = makeLodSet(headroomSlots.length);
+const headroomOverview = makeLodSet(headroomSlots.length);
+headroomNear.branches.count = 13;
+headroomNear.cards[0].count = 13;
+const headroomJob = createInstanceMatrixWriteJob(
+  headroomNear,
+  headroomOverview,
+  headroomSlots,
+  headroomSlots.map((_, index) => index),
+  [],
+);
+let headroomSample = 0;
+const headroomResult = runInstanceMatrixWriteSlices(headroomJob, {
+  deadlineMs: 1,
+  minimumChunkHeadroomMs: 0.2,
+  maxMatrixWritesPerChunk: 128,
+  now: () => {
+    headroomSample++;
+    return headroomSample < 36 ? 0 : 0.85;
+  },
+});
+assert.equal(headroomResult.completed, false);
+assert.equal(headroomResult.stopReason, 'headroom-limit');
+assert.equal(headroomResult.chunks, 1);
+assert.equal(headroomResult.matrixWrites, 128);
+assert.equal(headroomResult.maxMatrixWritesInChunk, 128);
+assert.ok(headroomResult.durationMs <= 1);
+assert.equal(
+  headroomNear.branches.count,
+  13,
+  'headroom stop must leave live counts at the previous atomic publication',
+);
+assert.equal(headroomNear.cards[0].count, 13);
+
 for (const set of [
   near,
   overview,
@@ -229,6 +322,10 @@ for (const set of [
   slicedOverview,
   deadlineNear,
   deadlineOverview,
+  multiSliceNear,
+  multiSliceOverview,
+  headroomNear,
+  headroomOverview,
 ]) {
   set.branches.geometry.dispose();
   set.branches.material.dispose();

@@ -128,4 +128,85 @@ assert.deepEqual(
 );
 assert.deepEqual(cancellation.pendingBucketIndices, []);
 
+const movingCurrent = structuredClone(frozen);
+const movingFirstDesired = structuredClone(active);
+const movingSecondDesired = structuredClone(active);
+movingSecondDesired[0] = structuredClone(frozen[0]);
+movingSecondDesired[1] = { near: [7, 1], overview: [] };
+let movingPending = [];
+let movingDesired = movingFirstDesired;
+let movingNowMs = 0;
+let activeBucketJob = null;
+const publishedBuckets = [];
+const cancelledActiveBuckets = [];
+
+function runMovingUpdate(maxDurationMs = 1.6) {
+  const result = runForestBucketUpdateChunk(
+    movingCurrent,
+    movingDesired,
+    movingPending,
+    {
+      maxDurationMs,
+      minimumChunkHeadroomMs: 0.2,
+      maxChunks: 8,
+      maxBucketCompletions: 1,
+      now: () => movingNowMs,
+      applyBucketChunk(bucketIndex) {
+        movingNowMs += 0.3;
+        if (activeBucketJob && activeBucketJob.bucketIndex !== bucketIndex) {
+          cancelledActiveBuckets.push(activeBucketJob.bucketIndex);
+          activeBucketJob = null;
+        }
+        if (!activeBucketJob) {
+          activeBucketJob = { bucketIndex, slices: 0 };
+        }
+        activeBucketJob.slices++;
+        if (activeBucketJob.slices < 3) return false;
+        movingCurrent[bucketIndex] = structuredClone(movingDesired[bucketIndex]);
+        publishedBuckets.push(bucketIndex);
+        activeBucketJob = null;
+        return true;
+      },
+    },
+  );
+  movingPending = result.pendingBucketIndices;
+  if (
+    activeBucketJob
+    && result.cancelledBucketIndices.includes(activeBucketJob.bucketIndex)
+  ) {
+    cancelledActiveBuckets.push(activeBucketJob.bucketIndex);
+    activeBucketJob = null;
+  }
+  assert.ok(result.durationMs <= maxDurationMs + Number.EPSILON);
+  assert.ok(result.chunks <= 5);
+  return result;
+}
+
+const movingFirstUpdate = runMovingUpdate(0.75);
+assert.equal(movingFirstUpdate.chunks, 2);
+assert.deepEqual(movingFirstUpdate.completedBucketIndices, []);
+assert.equal(activeBucketJob?.bucketIndex, 0);
+movingDesired = movingSecondDesired;
+const movingSecondUpdate = runMovingUpdate();
+assert.ok(
+  movingSecondUpdate.cancelledBucketIndices.includes(0),
+  'new camera selection must cancel stale partial route work',
+);
+for (let update = 0; update < 32 && movingPending.length > 0; update++) {
+  runMovingUpdate();
+}
+assert.deepEqual(
+  movingCurrent,
+  movingSecondDesired,
+  'moving-camera invalidation must converge to the newest desired selection',
+);
+assert.deepEqual(movingPending, [], 'settled moving-camera work must reach pending=0');
+assert.equal(activeBucketJob, null);
+assert.deepEqual(
+  [...new Set(publishedBuckets)].sort((left, right) => left - right),
+  [1, 2, 3, 4, 5, 6, 7],
+  'only buckets dirty in the newest camera selection may publish',
+);
+assert.deepEqual(cancelledActiveBuckets, [0]);
+
 console.log('test:forest-update-budget passed');

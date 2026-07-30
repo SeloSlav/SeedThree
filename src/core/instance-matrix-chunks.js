@@ -119,6 +119,79 @@ export function runInstanceMatrixWriteChunk(
   };
 }
 
+/**
+ * Run multiple fine matrix-write chunks without publishing partial results.
+ *
+ * This lets frame-budgeted consumers keep a small per-chunk preemption bound
+ * while using any remaining deadline headroom to finish an atomic bucket.
+ */
+export function runInstanceMatrixWriteSlices(
+  job,
+  options,
+) {
+  const now = options.now ?? defaultNow;
+  const startedAt = now();
+  const deadlineMs = Number.isFinite(options.deadlineMs)
+    ? options.deadlineMs
+    : Number.POSITIVE_INFINITY;
+  const minimumChunkHeadroomMs = Number.isFinite(options.minimumChunkHeadroomMs)
+    ? Math.max(0, options.minimumChunkHeadroomMs)
+    : 0;
+  const maxChunks = Number.isFinite(options.maxChunks)
+    ? Math.max(0, Math.floor(options.maxChunks))
+    : Number.POSITIVE_INFINITY;
+  let chunks = 0;
+  let matrixWrites = 0;
+  let maxMatrixWritesInChunk = 0;
+  let stopReason = job.completed ? 'converged' : 'chunk-limit';
+
+  while (!job.completed) {
+    if (chunks >= maxChunks) {
+      stopReason = 'chunk-limit';
+      break;
+    }
+    const remainingMs = deadlineMs - now();
+    if (remainingMs <= 0) {
+      stopReason = 'time-limit';
+      break;
+    }
+    if (remainingMs < minimumChunkHeadroomMs) {
+      stopReason = 'headroom-limit';
+      break;
+    }
+
+    const chunk = runInstanceMatrixWriteChunk(job, {
+      deadlineMs,
+      maxMatrixWrites: options.maxMatrixWritesPerChunk,
+      deadlineCheckInterval: options.deadlineCheckInterval,
+      now,
+    });
+    chunks++;
+    matrixWrites += chunk.matrixWrites;
+    maxMatrixWritesInChunk = Math.max(
+      maxMatrixWritesInChunk,
+      chunk.matrixWrites,
+    );
+    if (job.completed) {
+      stopReason = 'converged';
+      break;
+    }
+    if (chunk.matrixWrites === 0) {
+      stopReason = now() >= deadlineMs ? 'time-limit' : 'no-progress';
+      break;
+    }
+  }
+
+  return {
+    completed: job.completed,
+    chunks,
+    matrixWrites,
+    maxMatrixWritesInChunk,
+    durationMs: now() - startedAt,
+    stopReason,
+  };
+}
+
 function createMatrixWriteTasks(lodSet, slots, selectedSlotIndices) {
   const tasks = [];
   if (lodSet.branches) {
