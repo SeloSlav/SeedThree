@@ -135,6 +135,26 @@ export function planSlotAttributeUpdateRanges(
   };
 }
 
+/**
+ * Resolve a streamed visual's visibility across separate enter/exit thresholds.
+ *
+ * Keeping this tiny stateful dead-band in the shared stream layer prevents a
+ * whole instanced submission from chattering when a camera or LOD value hovers
+ * on its activation boundary. The exit threshold is bounded to the enter
+ * threshold so a malformed caller cannot invert the hysteresis band.
+ */
+export function resolveStreamVisibilityHysteresis(
+  wasVisible,
+  value,
+  enterThreshold,
+  exitThreshold,
+) {
+  const enter = finite(enterThreshold, 0);
+  const exit = Math.min(enter, finite(exitThreshold, enter));
+  const sample = finite(value, 0);
+  return wasVisible ? sample > exit : sample >= enter;
+}
+
 function finite(value, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }

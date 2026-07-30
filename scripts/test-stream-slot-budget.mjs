@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   coalesceStreamSlotRequests,
   planSlotAttributeUpdateRanges,
+  resolveStreamVisibilityHysteresis,
   runStreamSlotUpdateChunk,
 } from '../src/core/stream-slot-budget.js';
 
@@ -83,6 +84,33 @@ assert.deepEqual(
 assert.deepEqual(
   planSlotAttributeUpdateRanges([], 10, 16),
   { ranges: [], componentCount: 0, byteCount: 0 },
+);
+
+assert.equal(
+  resolveStreamVisibilityHysteresis(false, 0.0029, 0.003, 0.0005),
+  false,
+);
+assert.equal(
+  resolveStreamVisibilityHysteresis(false, 0.003, 0.003, 0.0005),
+  true,
+);
+assert.equal(
+  resolveStreamVisibilityHysteresis(true, 0.0006, 0.003, 0.0005),
+  true,
+);
+assert.equal(
+  resolveStreamVisibilityHysteresis(true, 0.0005, 0.003, 0.0005),
+  false,
+);
+assert.equal(
+  resolveStreamVisibilityHysteresis(true, Number.NaN, 0.003, 0.0005),
+  false,
+  'non-finite samples must fail closed',
+);
+assert.equal(
+  resolveStreamVisibilityHysteresis(false, 0.003, 0.001, 0.004),
+  true,
+  'an inverted exit threshold must be bounded to the enter threshold',
 );
 
 console.log('test:stream-slot-budget passed');
