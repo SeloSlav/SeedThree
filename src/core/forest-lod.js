@@ -26,7 +26,22 @@ const DEFAULTS = Object.freeze({
   lodHysteresis: 14,
   minimumCameraMove: 2.25,
   minimumDirectionAngle: Math.PI / 180,
+  // Projection coefficients drift on every frame during a smooth FOV tween.
+  // Compare against the last completed selection so that small changes
+  // accumulate inside a conservative envelope instead of forcing a rebuild.
+  minimumProjectionChange: 0.005,
+  minimumCasterBoundsChange: 0.75,
 });
+
+const TRIGGER_REASONS = Object.freeze([
+  'initial',
+  'force',
+  'camera-moved',
+  'camera-turned',
+  'projection-envelope',
+  'caster-bounds-envelope',
+  'selection-policy',
+]);
 
 const COMPANION_DEFAULTS = Object.freeze({
   neighborRadius: 32,
@@ -70,6 +85,17 @@ function sameProjection(left, right) {
   return true;
 }
 
+function changedOutsideEnvelope(left, right, minimumChange) {
+  if (!left || !right) return left !== right;
+  if (left.length !== right.length) return true;
+  const threshold = Math.max(0, finite(minimumChange, 0));
+  for (let i = 0; i < left.length; i++) {
+    const delta = Math.abs(left[i] - right[i]);
+    if (threshold === 0 ? delta > 1e-7 : delta >= threshold) return true;
+  }
+  return false;
+}
+
 function casterSignature(bounds) {
   if (!bounds) return null;
   return [bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ];
@@ -81,7 +107,21 @@ function selectionPolicySignature(options) {
     options.frustumPadding,
     options.casterPadding,
     options.lodHysteresis,
+    options.minimumProjectionChange,
+    options.minimumCasterBoundsChange,
   ];
+}
+
+function createTriggerReasonCounts() {
+  return Object.fromEntries(TRIGGER_REASONS.map((reason) => [reason, 0]));
+}
+
+function recordTriggerReasons(selector, triggerReasons) {
+  selector.telemetry.evaluations++;
+  selector.telemetry.lastTriggerReasons = [...triggerReasons];
+  for (const reason of triggerReasons) {
+    selector.telemetry.triggerReasons[reason]++;
+  }
 }
 
 function intersectsCasterBounds(x, z, radius, bounds, padding) {
@@ -327,6 +367,13 @@ export function createForestLodSelector(sourceItems, options = {}) {
     lastSelectionPolicy: null,
     hasSelection: false,
     revision: 0,
+    telemetry: {
+      calls: 0,
+      evaluations: 0,
+      skips: 0,
+      lastTriggerReasons: [],
+      triggerReasons: createTriggerReasonCounts(),
+    },
     options: { ...DEFAULTS, ...options, cellSize },
   };
 }
@@ -338,6 +385,7 @@ export function createForestLodSelector(sourceItems, options = {}) {
  * immutable-by-convention lists with `changed:false, skipped:true`.
  */
 export function selectForestLods(selector, camera, options = {}) {
+  selector.telemetry.calls++;
   camera.updateMatrixWorld?.();
   camera.getWorldPosition(_cameraPosition);
   camera.getWorldDirection(_cameraDirection);
@@ -356,6 +404,20 @@ export function selectForestLods(selector, camera, options = {}) {
   const minimumDirectionAngle = Math.max(
     0,
     finite(options.minimumDirectionAngle, selector.options.minimumDirectionAngle),
+  );
+  const minimumProjectionChange = Math.max(
+    0,
+    finite(
+      options.minimumProjectionChange,
+      selector.options.minimumProjectionChange,
+    ),
+  );
+  const minimumCasterBoundsChange = Math.max(
+    0,
+    finite(
+      options.minimumCasterBoundsChange,
+      selector.options.minimumCasterBoundsChange,
+    ),
   );
   const padding = Math.max(
     0,
@@ -377,6 +439,8 @@ export function selectForestLods(selector, camera, options = {}) {
     frustumPadding: padding,
     casterPadding,
     lodHysteresis: hysteresis,
+    minimumProjectionChange,
+    minimumCasterBoundsChange,
   });
   const directionDotThreshold = Math.cos(minimumDirectionAngle);
   const cameraMoved = !selector.lastCameraPosition
@@ -384,22 +448,33 @@ export function selectForestLods(selector, camera, options = {}) {
       >= minimumCameraMove * minimumCameraMove;
   const cameraTurned = !selector.lastCameraDirection
     || selector.lastCameraDirection.dot(_cameraDirection) <= directionDotThreshold;
-  const projectionChanged = !sameProjection(selector.lastProjection, projection);
-  const casterBoundsChanged = !sameProjection(
+  const projectionChanged = changedOutsideEnvelope(
+    selector.lastProjection,
+    projection,
+    minimumProjectionChange,
+  );
+  const casterBoundsChanged = changedOutsideEnvelope(
     selector.lastCasterBounds,
     casterBoundsSignature,
+    minimumCasterBoundsChange,
   );
   const policyChanged = !sameProjection(selector.lastSelectionPolicy, selectionPolicy);
+  const triggerReasons = [];
+  if (!selector.hasSelection) {
+    triggerReasons.push('initial');
+  } else if (options.force) {
+    triggerReasons.push('force');
+  } else {
+    if (cameraMoved) triggerReasons.push('camera-moved');
+    if (cameraTurned) triggerReasons.push('camera-turned');
+    if (projectionChanged) triggerReasons.push('projection-envelope');
+    if (casterBoundsChanged) triggerReasons.push('caster-bounds-envelope');
+    if (policyChanged) triggerReasons.push('selection-policy');
+  }
 
-  if (
-    selector.hasSelection
-    && !options.force
-    && !cameraMoved
-    && !cameraTurned
-    && !projectionChanged
-    && !casterBoundsChanged
-    && !policyChanged
-  ) {
+  if (triggerReasons.length === 0) {
+    selector.telemetry.skips++;
+    selector.telemetry.lastTriggerReasons = [];
     return {
       nearIndices: selector.nearIndices,
       overviewIndices: selector.overviewIndices,
@@ -410,9 +485,11 @@ export function selectForestLods(selector, camera, options = {}) {
         - selector.overviewIndices.length,
       changed: false,
       skipped: true,
+      triggerReasons,
       revision: selector.revision,
     };
   }
+  recordTriggerReasons(selector, triggerReasons);
 
   selector.lastCameraPosition = selector.lastCameraPosition ?? new Vector3();
   selector.lastCameraDirection = selector.lastCameraDirection ?? new Vector3();
@@ -505,9 +582,11 @@ export function selectForestLods(selector, camera, options = {}) {
       - selector.overviewIndices.length,
     changed,
     skipped: false,
+    triggerReasons,
     revision: selector.revision,
   };
 }
 
 export const FOREST_LOD_DEFAULTS = DEFAULTS;
 export const FOREST_COMPANION_DEFAULTS = COMPANION_DEFAULTS;
+export const FOREST_LOD_TRIGGER_REASONS = TRIGGER_REASONS;
