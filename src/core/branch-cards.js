@@ -6,9 +6,11 @@
 // instances, real leaf material) are rendered through the multichannel baker
 // into unlit material inputs (albedo/normal/rough/translucency). At LOD1+ every
 // terminal twig — cylinder AND leaves — is replaced by ONE single-quad card
-// instance using those bakes, placed with the branch's own frame. Because the
-// card is literally a picture of the LOD0 tree relit by the same material
-// family, color/density/silhouette parity across the LOD switch is automatic.
+// instance using those bakes, placed with the branch's own frame. Species can
+// request a bounded, bake-only coverage cohort: it fills projection holes in
+// leaf-heavy crowns while preserving the original cohort and adding no runtime
+// cards, draws, or triangles. The card remains a picture of real SeedThree
+// foliage relit by the same material family.
 //
 // Bakes are cached per (species, leaf params) in main.js — they're built from a
 // FIXED exemplar seed, so reseeding the tree reuses them.
@@ -31,6 +33,16 @@ const MAX_CARD_INSTANCES = 4096; // aThickness allocation on the shared geometry
 const TRANSMIT = [0.42, 0.62, 0.24];
 const SEASONAL_TREE_ORIGIN_Y_OFFSET = 2048;
 
+// Consumers with persistent branch-card atlases should include this revision in
+// their cache key. Revision 2 adds the bounded coverage cohort below.
+export const BRANCH_CARD_BAKE_REVISION = 2;
+export const BRANCH_CARD_COVERAGE_DEFAULTS = Object.freeze({
+  maxCoverage: 2,
+  // Temporary bake-source cost only. With the default crossed-leaf geometry
+  // this permits at most 512 extra leaves / 2,048 extra triangles per exemplar.
+  extraTriangleBudget: 2048,
+});
+
 const chordVec = (stem, out) =>
   out.copy(stem.points[stem.points.length - 1]).sub(stem.points[0]);
 
@@ -41,6 +53,80 @@ function stemArcLen(stem) {
   let l = 0; const p = stem.points;
   for (let i = 1; i < p.length; i++) l += p[i].distanceTo(p[i - 1]);
   return l;
+}
+
+/**
+ * Plan a second, deterministic leaf cohort used only while rasterizing a branch
+ * card. `foliage.cardCoverage` is a perceived-coverage target, not a runtime
+ * density multiplier: the original leaves are built first with their unchanged
+ * RNG stream, then this many fill leaves are baked into the same atlas.
+ *
+ * Extra geometry is bounded in triangles per exemplar. The result deliberately
+ * reports runtimeCardInstancesAdded=0 so hosts can expose/verify the cost model.
+ */
+export function planBranchCardCoverage(foliage = {}, terminalStemCount = 0, opts = {}) {
+  const stems = Math.max(
+    0,
+    Math.floor(Number.isFinite(terminalStemCount) ? terminalStemCount : 0),
+  );
+  const baseLeavesPerBranch = Math.max(
+    0,
+    Math.round(Number.isFinite(foliage.leavesPerBranch) ? foliage.leavesPerBranch : 14),
+  );
+  const quads = Math.max(
+    1,
+    Math.round(Number.isFinite(foliage.quads) ? foliage.quads : 2),
+  );
+  const trianglesPerLeaf = quads * 2;
+  const rawCoverage = opts.coverage ?? foliage.cardCoverage ?? 1;
+  const coverage = Math.min(
+    BRANCH_CARD_COVERAGE_DEFAULTS.maxCoverage,
+    Math.max(1, Number.isFinite(rawCoverage) ? rawCoverage : 1),
+  );
+  const requestedLeavesPerBranch = Math.max(
+    baseLeavesPerBranch,
+    Math.round(baseLeavesPerBranch * coverage),
+  );
+  const extraTriangleBudget = Math.max(
+    0,
+    Math.floor(Number.isFinite(opts.extraTriangleBudget)
+      ? opts.extraTriangleBudget
+      : BRANCH_CARD_COVERAGE_DEFAULTS.extraTriangleBudget),
+  );
+  const requestedExtraLeavesPerBranch = requestedLeavesPerBranch - baseLeavesPerBranch;
+  const affordableExtraLeavesPerBranch = stems > 0
+    ? Math.floor(extraTriangleBudget / (stems * trianglesPerLeaf))
+    : 0;
+  const extraLeavesPerBranch = Math.max(
+    0,
+    Math.min(requestedExtraLeavesPerBranch, affordableExtraLeavesPerBranch),
+  );
+  const sourceLeafInstances = stems * baseLeavesPerBranch;
+  const requestedLeafInstances = stems * requestedLeavesPerBranch;
+  const extraBakeLeafInstances = stems * extraLeavesPerBranch;
+  const extraBakeTriangles = extraBakeLeafInstances * trianglesPerLeaf;
+
+  return {
+    bakeRevision: BRANCH_CARD_BAKE_REVISION,
+    terminalStemCount: stems,
+    baseLeavesPerBranch,
+    requestedLeavesPerBranch,
+    extraLeavesPerBranch,
+    sourceLeafInstances,
+    requestedLeafInstances,
+    bakeLeafInstances: sourceLeafInstances + extraBakeLeafInstances,
+    extraBakeLeafInstances,
+    trianglesPerLeaf,
+    extraBakeTriangles,
+    extraTriangleBudget,
+    coverageRequested: Number.isFinite(rawCoverage) ? rawCoverage : 1,
+    coverageApplied: coverage,
+    coverageRealized: baseLeavesPerBranch > 0
+      ? (baseLeavesPerBranch + extraLeavesPerBranch) / baseLeavesPerBranch
+      : 1,
+    budgetLimited: extraLeavesPerBranch < requestedExtraLeavesPerBranch,
+    runtimeCardInstancesAdded: 0,
+  };
 }
 
 // Rebase a stem into card-local space: base at the origin, chord along +Y —
@@ -151,8 +237,9 @@ function makeCardMaterial(t, centerUniform, opts = {}) {
  *
  * @param {object} species  shaped species preset (params + foliage reflect GUI)
  * @param {object} assets   cached species assets (barkMat, leafMat, ...)
- * @param {object} opts     { size, variants, cardLevel } — cardLevel defaults to
- *                          the deepest level (per-twig cards); lower levels bake a
+ * @param {object} opts     { size, variants, cardLevel, coverage,
+ *                          extraTriangleBudget } — cardLevel defaults to the
+ *                          deepest level (per-twig cards); lower levels bake a
  *                          whole limb (branch + twigs + leaves) into one card.
  * @returns {Promise<{variants: Array, centerUniform} | null>}
  */
@@ -185,6 +272,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
   const centerUniform = uniform(new Vector3());
   const thicknessRng = new Rng(`${species.name}:cards:thickness`);
   const variants = [];
+  const coverageTelemetry = [];
   for (const [vi, stem] of picks.entries()) {
     // The exemplar is the root's WHOLE subtree, rebased by the root frame. At the
     // default (terminal) level the subtree is just the twig itself, so this stays
@@ -219,11 +307,52 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
       const pts = s.points.map((p, j) => { if (j > 0) acc += p.distanceTo(s.points[j - 1]); return new Vector3(0, acc, 0); });
       return { ...s, points: pts, orients: s.orients.map(() => new Quaternion()) };
     });
-    const leaves = buildFoliage(bakeStems, { ...(species.foliage || {}), mode: 'leaves', trunkClearRadius: 0 }, frng, assets.leafMat, null);
+    const foliageCfg = {
+      ...(species.foliage || {}),
+      mode: 'leaves',
+      trunkClearRadius: 0,
+    };
+    // Build the original cohort first with the exact pre-revision seed/stream.
+    // The fill cohort has its own stable seed, so enabling coverage cannot move
+    // or reorient any existing leaf; it only adds overlap inside the same twig
+    // envelope. Both meshes are temporary and disappear after rasterization.
+    const leaves = buildFoliage(bakeStems, foliageCfg, frng, assets.leafMat, null);
     if (leaves) group.add(leaves);
-    if (!group.children.length) continue; // foliage-only exemplar with no leaves → nothing to bake
+    const coveragePlan = planBranchCardCoverage(foliageCfg, bakeStems.length, {
+      coverage: opts.coverage,
+      extraTriangleBudget: opts.extraTriangleBudget,
+    });
+    let coverageLeaves = null;
+    if (coveragePlan.extraLeavesPerBranch > 0) {
+      const coverageRng = new Rng(
+        `${species.name}:cards:${vi}:coverage-v${BRANCH_CARD_BAKE_REVISION}`,
+      );
+      coverageLeaves = buildFoliage(
+        bakeStems,
+        { ...foliageCfg, leavesPerBranch: coveragePlan.extraLeavesPerBranch },
+        coverageRng,
+        assets.leafMat,
+        null,
+      );
+      if (coverageLeaves) group.add(coverageLeaves);
+    }
+    coverageTelemetry.push({
+      variantIndex: vi,
+      cardLevel,
+      foliageOnly: !!opts.foliageOnly,
+      ...coveragePlan,
+    });
+    if (!group.children.length) {
+      // Even an empty foliage-only exemplar may have allocated its source
+      // geometry before filtering produced no renderable children.
+      twigGeo?.dispose();
+      if (leaves) leaves.geometry.dispose();
+      if (coverageLeaves) coverageLeaves.geometry.dispose();
+      continue;
+    }
 
     if (leaves) leaves.computeBoundingBox?.();
+    if (coverageLeaves) coverageLeaves.computeBoundingBox?.();
     const box = new Box3().setFromObject(group);
     const center = box.getCenter(new Vector3());
     const sz = box.getSize(new Vector3());
@@ -234,11 +363,21 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     cam.position.set(center.x, center.y, center.z + depth);
     cam.lookAt(center);
 
-    const baked = (await bakeGroupToTextures(renderer, group, [{ name: 'card', camera: cam }], { size, dilate: 10 })).card;
-
-    // Bake-only geometry is disposable; the card quad is cached across rebuilds.
-    twigGeo?.dispose();
-    if (leaves) leaves.geometry.dispose();
+    let baked;
+    try {
+      baked = (await bakeGroupToTextures(
+        renderer,
+        group,
+        [{ name: 'card', camera: cam }],
+        { size, dilate: 10 },
+      )).card;
+    } finally {
+      // Bake-only geometry must be released even if GPU rendering/readback
+      // rejects. The card quad created below is the only cached geometry.
+      twigGeo?.dispose();
+      if (leaves) leaves.geometry.dispose();
+      if (coverageLeaves) coverageLeaves.geometry.dispose();
+    }
 
     const geometry = cardQuadGeometry(center, halfW, halfH);
     geometry.userData.shared = true; // disposeTree must NOT free cached card geometry
@@ -256,7 +395,29 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
       chordLen: stemArcLen(stem), // ARC length (stable), not the collapsing chord
     });
   }
-  return variants.length ? { variants, centerUniform, foliageOnly: !!opts.foliageOnly } : null;
+  if (!variants.length) return null;
+  return {
+    variants,
+    centerUniform,
+    foliageOnly: !!opts.foliageOnly,
+    telemetry: {
+      bakeRevision: BRANCH_CARD_BAKE_REVISION,
+      coverage: coverageTelemetry,
+      sourceLeafInstances: coverageTelemetry.reduce(
+        (sum, item) => sum + item.sourceLeafInstances,
+        0,
+      ),
+      extraBakeLeafInstances: coverageTelemetry.reduce(
+        (sum, item) => sum + item.extraBakeLeafInstances,
+        0,
+      ),
+      extraBakeTriangles: coverageTelemetry.reduce(
+        (sum, item) => sum + item.extraBakeTriangles,
+        0,
+      ),
+      runtimeCardInstancesAdded: 0,
+    },
+  };
 }
 
 /**

@@ -18,6 +18,7 @@ export const cherry = {
     clusterQuads: 2,
     tint: 0xcce0a9,
     leavesPerBranch: 8,
+    cardCoverage: 1.5,
     size: 0.22,
     downAngle: 48,
     bend: 0,

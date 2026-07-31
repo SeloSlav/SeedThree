@@ -9,7 +9,12 @@ import { buildTerrainArrays, buildTerrainMaterial } from './core/terrain-materia
 import { buildVolumetricClouds } from './core/clouds.js';
 import { bakeImpostor, disposeBillboard, assembleBillboardFromRawBake } from './core/impostor.js';
 import { serializeSource } from './core/bake-transfer.js';
-import { bakeBranchCards, disposeBranchCards, forestCardMaterial } from './core/branch-cards.js';
+import {
+  BRANCH_CARD_BAKE_REVISION,
+  bakeBranchCards,
+  disposeBranchCards,
+  forestCardMaterial,
+} from './core/branch-cards.js';
 import { buildRocks } from './core/rocks.js';
 import { buildGrass } from './core/grass.js';
 import { buildWildflowers } from './core/wildflowers.js';
@@ -583,7 +588,7 @@ async function main() {
     if (!shaped.foliage || (shaped.foliage.leavesPerBranch ?? 1) <= 0) return null;
     // Mobile bakes EXTRA whole-limb card sets (its LOD3/LOD4 collapse limbs into
     // cards), so the toggle keys its own cache entry.
-    const key = `${species.name}|${shaped.foliage.size}|${shaped.foliage.leavesPerBranch}|${shaped.params.levels}|${optState.cardRes}|${optState.cardVariants}|${optState.mobileTarget ? 'm' : 'd'}`;
+    const key = `${species.name}|${shaped.foliage.size}|${shaped.foliage.leavesPerBranch}|${shaped.params.levels}|${optState.cardRes}|${optState.cardVariants}|${optState.mobileTarget ? 'm' : 'd'}|b${BRANCH_CARD_BAKE_REVISION}`;
     let cards = cardCache.get(key);
     if (cards) return cards;
     const assets = assetCache.get(species.name);

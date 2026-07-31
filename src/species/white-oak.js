@@ -33,6 +33,7 @@ export const whiteOak = {
     tint: 0xdfe8c8,          // near-neutral so the texture's green shows faithfully
     // single-leaf fallback params (used if mode:'leaves')
     leavesPerBranch: 14,
+    cardCoverage: 1.5,
     size: 0.6,
     downAngle: 52,
     bend: 0,
