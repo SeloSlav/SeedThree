@@ -10,6 +10,7 @@ import {
 import { texture, attribute, vec4, cameraViewMatrix, normalize, uniform, normalMap, normalView } from 'three/tsl';
 import { Rng } from './rng.js';
 import { grassWindPosition } from './wind.js';
+import { applyGroundCoverShadowPolicy } from './ground-cover-shadows.js';
 
 // Crossed base-anchored quads (y 0..1), up-facing normals. `planes` and `width`
 // give distinct tuft silhouettes so the meadow isn't one shape stamped 13k times.
@@ -88,8 +89,11 @@ export function buildGrass(opts = {}) {
   ].map((v) => {
     const cap = Math.ceil(count * v.share);
     const mesh = new InstancedMesh(v.geo, mat, cap);
-    mesh.receiveShadow = true;
-    mesh.castShadow = true;
+    applyGroundCoverShadowPolicy(mesh, {
+      castShadow: opts.castShadow ?? false,
+      receiveShadow: opts.receiveShadow ?? 'auto',
+      terrainReceivesShadow: opts.terrainReceivesShadow ?? true,
+    });
     return { ...v, cap, mesh, tint: new Float32Array(cap * 3), placed: 0 };
   });
 

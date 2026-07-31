@@ -24,6 +24,7 @@ import {
 } from 'three/tsl';
 import { Rng } from './rng.js';
 import { grassWindPosition } from './wind.js';
+import { applyGroundCoverShadowPolicy } from './ground-cover-shadows.js';
 
 const TAU = Math.PI * 2;
 const STEM_COLORS = [new Color(0x405b32), new Color(0x526e3b)];
@@ -133,8 +134,11 @@ export function buildWildflowers(opts = {}) {
 
   const mesh = new InstancedMesh(geometry, material, count);
   mesh.name = 'wildflowers';
-  mesh.receiveShadow = true;
-  mesh.castShadow = false;
+  applyGroundCoverShadowPolicy(mesh, {
+    castShadow: opts.castShadow ?? false,
+    receiveShadow: opts.receiveShadow ?? 'auto',
+    terrainReceivesShadow: opts.terrainReceivesShadow ?? true,
+  });
 
   const matrix = new Matrix4();
   const quaternion = new Quaternion();
