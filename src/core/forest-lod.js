@@ -351,6 +351,7 @@ export function createForestLodSelector(sourceItems, options = {}) {
     y: finite(item.y, 0),
     z: finite(item.z, 0),
     radius: Math.max(0.25, finite(item.radius, 1)),
+    forceOverview: item.forceOverview === true,
   }));
   return {
     items,
@@ -551,11 +552,13 @@ export function selectForestLods(selector, camera, options = {}) {
     const item = selector.items[index];
     const distance = _cameraPosition.distanceTo(_sphere.center.set(item.x, item.y, item.z));
     const previous = selector.lodState[index];
-    const useNear = previous === 1
-      ? distance <= nearExit
-      : previous === 2
-        ? distance < nearEnter
-        : distance <= nearDistance;
+    const useNear = !item.forceOverview && (
+      previous === 1
+        ? distance <= nearExit
+        : previous === 2
+          ? distance < nearEnter
+          : distance <= nearDistance
+    );
     selector.lodState[index] = useNear ? 1 : 2;
     (useNear ? near : overview).push(index);
   }
