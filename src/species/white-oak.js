@@ -34,6 +34,8 @@ export const whiteOak = {
     // single-leaf fallback params (used if mode:'leaves')
     leavesPerBranch: 14,
     cardCoverage: 1.5,
+    cardRadialPlanes: 2,
+    mobileNearTwigCollapse: true,
     size: 0.6,
     downAngle: 52,
     bend: 0,

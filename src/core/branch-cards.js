@@ -34,13 +34,20 @@ const TRANSMIT = [0.42, 0.62, 0.24];
 const SEASONAL_TREE_ORIGIN_Y_OFFSET = 2048;
 
 // Consumers with persistent branch-card atlases should include this revision in
-// their cache key. Revision 2 adds the bounded coverage cohort below.
-export const BRANCH_CARD_BAKE_REVISION = 2;
+// their cache key. Revision 3 adds opt-in radial card planes to the persisted
+// geometry while retaining the revision-2 bake-only coverage cohort below.
+export const BRANCH_CARD_BAKE_REVISION = 3;
 export const BRANCH_CARD_COVERAGE_DEFAULTS = Object.freeze({
   maxCoverage: 2,
   // Temporary bake-source cost only. With the default crossed-leaf geometry
   // this permits at most 512 extra leaves / 2,048 extra triangles per exemplar.
   extraTriangleBudget: 2048,
+});
+export const BRANCH_CARD_LIVE_COVERAGE_DEFAULTS = Object.freeze({
+  // One extra plane is enough to keep a branch card readable from every
+  // azimuth. More planes add overdraw without a useful silhouette gain.
+  maxRadialPlanes: 2,
+  trianglesPerPlane: 2,
 });
 
 const chordVec = (stem, out) =>
@@ -184,20 +191,61 @@ function rebaseSubtree(subtree, root) {
 
 // Single quad spanning the bake framing, in the SAME stem-local space (origin =
 // stem base) so instance transforms are just (base position, chord rotation, scale).
-function cardQuadGeometry(center, halfW, halfH) {
+function resolveRadialPlanes(foliage = {}) {
+  const requested = Number.isFinite(foliage.cardRadialPlanes)
+    ? Math.round(foliage.cardRadialPlanes)
+    : 1;
+  return Math.max(
+    1,
+    Math.min(BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.maxRadialPlanes, requested),
+  );
+}
+
+function geometryRadialPlanes(geometry) {
+  const indexCount = geometry?.index?.count ?? 0;
+  if (indexCount <= 0) return 1;
+  return Math.max(
+    1,
+    Math.min(
+      BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.maxRadialPlanes,
+      Math.round(indexCount / 6),
+    ),
+  );
+}
+
+// One or two planes spanning the same bake framing. A crossed pair lives in ONE
+// geometry/instance: this closes edge-on holes without doubling instance
+// matrices, forest compaction writes, or draw calls.
+function cardQuadGeometry(center, halfW, halfH, radialPlanes = 1) {
   const geo = new BufferGeometry();
   const x0 = center.x - halfW, x1 = center.x + halfW;
   const y0 = center.y - halfH, y1 = center.y + halfH;
-  geo.setAttribute('position', new BufferAttribute(new Float32Array([
-    x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y1, 0,
-  ]), 3));
-  geo.setAttribute('normal', new BufferAttribute(new Float32Array([
-    0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
-  ]), 3));
-  geo.setAttribute('uv', new BufferAttribute(new Float32Array([
-    0, 0, 1, 0, 1, 1, 0, 1,
-  ]), 2));
-  geo.setIndex([0, 1, 2, 0, 2, 3]);
+  const planes = Math.max(
+    1,
+    Math.min(BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.maxRadialPlanes, radialPlanes),
+  );
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  for (let plane = 0; plane < planes; plane++) {
+    const angle = plane * Math.PI / 2;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const base = plane * 4;
+    for (const [x, y] of corners) {
+      positions.push(x * cos, y, -x * sin);
+      normals.push(sin, 0, cos);
+    }
+    uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+  geo.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
+  geo.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
+  geo.setAttribute('uv', new BufferAttribute(new Float32Array(uvs), 2));
+  geo.setIndex(indices);
+  geo.userData.cardRadialPlanes = planes;
   return geo;
 }
 
@@ -247,6 +295,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
   if (!assets.leafMat || !assets.barkMat) return null;
   const variantCount = opts.variants ?? 3;
   const size = opts.size ?? 512;
+  const radialPlanes = resolveRadialPlanes(species.foliage);
 
   // Fixed exemplar seed → deterministic cards independent of the live tree seed.
   const rng = new Rng(`${species.name}:cards`);
@@ -369,7 +418,12 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
         renderer,
         group,
         [{ name: 'card', camera: cam }],
-        { size, dilate: 10 },
+        {
+          size,
+          dilate: 10,
+          yield: opts.yield,
+          onRendererBusyChange: opts.onRendererBusyChange,
+        },
       )).card;
     } finally {
       // Bake-only geometry must be released even if GPU rendering/readback
@@ -379,7 +433,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
       if (coverageLeaves) coverageLeaves.geometry.dispose();
     }
 
-    const geometry = cardQuadGeometry(center, halfW, halfH);
+    const geometry = cardQuadGeometry(center, halfW, halfH, radialPlanes);
     geometry.userData.shared = true; // disposeTree must NOT free cached card geometry
     addThicknessAttribute(geometry, MAX_CARD_INSTANCES, thicknessRng);
     // per-instance wind heading×weight + anchor point (sway phase) — values
@@ -416,6 +470,9 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
         0,
       ),
       runtimeCardInstancesAdded: 0,
+      radialPlanes,
+      runtimeTrianglesPerCard:
+        radialPlanes * BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.trianglesPerPlane,
     },
   };
 }
@@ -435,7 +492,6 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
   // neighbours at random rolls cover for it — but a lone LIMB card IS the canopy
   // where it stands, so edge-on it left a bare pole with streaks. The 90° twin
   // keeps the limb readable from every azimuth for +2 tris per limb.
-  const copies = opts.crossed ? 2 : 1;
   const { variants, centerUniform } = cards;
   if (!terminalStems.length || !variants.length) return null;
 
@@ -476,6 +532,11 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
   for (const [vi, list] of buckets.entries()) {
     if (!list.length) continue;
     const variant = variants[vi];
+    // Persisted consumers may not retain geometry.userData, so infer the baked
+    // plane count from the index. A two-plane card already has full azimuth
+    // coverage and must not also duplicate its instance for crossed far rungs.
+    const radialPlanes = geometryRadialPlanes(variant.geometry);
+    const copies = opts.crossed && radialPlanes < 2 ? 2 : 1;
     const mesh = new InstancedMesh(variant.geometry, variant.material, list.length * copies);
     mesh.name = `cards${vi}`;
     const windVecAttr = variant.geometry.attributes.aWindVec;
@@ -491,7 +552,7 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
       // swaying it by the limb root's stiff base weight froze LOD2 while the
       // nearer LODs waved (the wind "mostly stopped" bug). Use the root's TIP
       // weight so the card moves like the foliage it stands in for.
-      const weight = (copies > 1)
+      const weight = opts.crossed
         ? (stem.winds?.[stem.winds.length - 1] ?? stem.winds?.[0] ?? 0.6)
         : (stem.winds?.[0] ?? 0.6);
       pos.copy(stem.points[0]);
@@ -528,6 +589,9 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
     }
     mesh.count = k;
     mesh.userData.windWeights = weights;
+    mesh.userData.cardRadialPlanes = radialPlanes;
+    mesh.userData.cardSourceStemCount = list.length;
+    mesh.userData.cardInstanceCopies = copies;
     mesh.instanceMatrix.needsUpdate = true;
     windVecAttr.needsUpdate = true;
     anchorAttr.needsUpdate = true;

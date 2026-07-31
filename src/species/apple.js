@@ -19,6 +19,8 @@ export const apple = {
     tint: 0xc8dda5,
     leavesPerBranch: 9,
     cardCoverage: 1.5,
+    cardRadialPlanes: 2,
+    mobileNearTwigCollapse: true,
     size: 0.24,
     downAngle: 54,
     bend: 0,

@@ -372,7 +372,13 @@ function lodLevels(species, opts = {}) {
   // Near (effective LOD0, dist 0) — reference mobile model. Terminal twigs are
   // 3-sided prisms decimated to ~base+tip (the ≤10k mobile-near budget lives or
   // dies on twig tube tris — they dominate the count).
-  Object.assign(base[2], rung('LOD2', 0, maxL, true, 0.6, 2, 1.0, 0.05),
+  // Dense broadleaves can collapse only their terminal twig tubes into the
+  // already-baked full-content cards. Combined with two radial planes inside
+  // each card instance, this hides pale twig frameworks from every azimuth and
+  // lowers total near-LOD triangles; species without the opt-in retain the
+  // original hybrid skeleton exactly.
+  const collapseNearTwigs = f.mobileNearTwigCollapse === true;
+  Object.assign(base[2], rung('LOD2', 0, maxL, !collapseNearTwigs, 0.6, 2, 1.0, 0.05),
     { appOnly: false, hiddenInApp: false, terminalSides: 3, terminalRingStride: 4 });
   // Density sliders thin the cards. PRUNE IS OFF on the mobile card rungs: the
   // prune sliders are DESKTOP dials (hidden in mobile mode), yet their values

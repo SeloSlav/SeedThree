@@ -13,7 +13,8 @@ export const americanBeech = {
   controls: broadleafControls,
   foliage: {
     mode: 'leaves', clustersPerBranch: 3, clusterSize: 1.3, clusterSizeVar: 0.3, clusterQuads: 2,
-    tint: 0xd6e6b0, leavesPerBranch: 7, cardCoverage: 1.5, size: 0.5, downAngle: 54, bend: 0, // dense bake-only broadleaf overlap
+    tint: 0xd6e6b0, leavesPerBranch: 7, cardCoverage: 1.5, cardRadialPlanes: 2,
+    mobileNearTwigCollapse: true, size: 0.5, downAngle: 54, bend: 0,
     trunkClearRadius: 0.7, // keep leaves off the trunk column (height-tapered)
   },
   // American beech (Fagus grandifolia): broad, wide-spreading DENSE dome on a short low-

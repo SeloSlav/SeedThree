@@ -9,6 +9,7 @@ import {
 import {
   BRANCH_CARD_BAKE_REVISION,
   BRANCH_CARD_COVERAGE_DEFAULTS,
+  BRANCH_CARD_LIVE_COVERAGE_DEFAULTS,
   buildCardFoliage,
   planBranchCardCoverage,
 } from '../src/core/branch-cards.js';
@@ -21,7 +22,7 @@ import { sweetgum } from '../src/species/sweetgum.js';
 import { tulipPoplar } from '../src/species/tulip-poplar.js';
 import { whiteOak } from '../src/species/white-oak.js';
 
-assert.equal(BRANCH_CARD_BAKE_REVISION, 2);
+assert.equal(BRANCH_CARD_BAKE_REVISION, 3);
 
 const broadleaves = [
   americanBeech,
@@ -47,6 +48,8 @@ for (const species of broadleaves) {
     `${species.name} fill cohort must fit the temporary triangle budget`,
   );
   assert.equal(first.runtimeCardInstancesAdded, 0);
+  assert.equal(species.foliage.cardRadialPlanes, 2);
+  assert.equal(species.foliage.mobileNearTwigCollapse, true);
   measurements.push({
     species: species.name,
     baseLeavesPerBranch: first.baseLeavesPerBranch,
@@ -117,6 +120,25 @@ function makeRuntimeCardSet(capacity) {
   };
 }
 
+function makeCrossedRuntimeCardSet(capacity) {
+  const set = makeRuntimeCardSet(capacity);
+  const geometry = set.variants[0].geometry;
+  geometry.setAttribute('position', new BufferAttribute(new Float32Array([
+    -0.5, 0, 0, 0.5, 0, 0, 0.5, 1, 0, -0.5, 1, 0,
+    0, 0, 0.5, 0, 0, -0.5, 0, 1, -0.5, 0, 1, 0.5,
+  ]), 3));
+  geometry.setAttribute('normal', new BufferAttribute(new Float32Array([
+    0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+    1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+  ]), 3));
+  geometry.setAttribute('uv', new BufferAttribute(new Float32Array([
+    0, 0, 1, 0, 1, 1, 0, 1,
+    0, 0, 1, 0, 1, 1, 0, 1,
+  ]), 2));
+  geometry.setIndex([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+  return set;
+}
+
 const runtimeStemCount = 20;
 const runtimeStems = Array.from({ length: runtimeStemCount }, (_, index) => {
   const base = new Vector3(index % 5, Math.floor(index / 5) * 0.1, index % 3);
@@ -144,8 +166,45 @@ const runtimeCardTriangles = runtimeFoliage.children.reduce(
 assert.equal(runtimeCardInstances, runtimeStemCount, 'coverage must not multiply runtime cards');
 assert.equal(runtimeCardTriangles, runtimeStemCount * 2, 'coverage must not grow runtime triangles');
 
+const crossedRuntimeCards = makeCrossedRuntimeCardSet(runtimeStemCount);
+const crossedRuntimeFoliage = buildCardFoliage(
+  runtimeStems,
+  crossedRuntimeCards,
+  new Rng('branch-card-crossed-runtime-count'),
+  { growScale: 1, keepFraction: 1, crossed: true },
+);
+const crossedRuntimeInstances = crossedRuntimeFoliage.children.reduce(
+  (sum, child) => sum + child.count,
+  0,
+);
+const crossedRuntimeTriangles = crossedRuntimeFoliage.children.reduce(
+  (sum, child) => sum + child.count * child.geometry.index.count / 3,
+  0,
+);
+assert.equal(
+  crossedRuntimeInstances,
+  runtimeStemCount,
+  'two radial planes must stay inside one live card instance',
+);
+assert.equal(
+  crossedRuntimeTriangles,
+  runtimeStemCount * 4,
+  'two radial planes have an exact four-triangle cost per stem',
+);
+const crossedWindWeights = crossedRuntimeFoliage.children.flatMap(
+  (child) => Array.from(child.userData.windWeights),
+);
+assert.equal(crossedWindWeights.length, runtimeStemCount);
+assert.ok(
+  crossedWindWeights.every((weight) => Math.abs(weight - 0.8) < 1e-6),
+  'merged crossed limb cards must keep semantic tip wind instead of stiff root wind',
+);
+assert.equal(BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.maxRadialPlanes, 2);
+
 runtimeCards.variants[0].geometry.dispose();
 runtimeCards.variants[0].material.dispose();
+crossedRuntimeCards.variants[0].geometry.dispose();
+crossedRuntimeCards.variants[0].material.dispose();
 
 console.log('SeedThree branch-card coverage policy tests passed.');
 console.table(measurements);
@@ -154,4 +213,6 @@ console.log({
   extraTriangleBudget: pathological.extraTriangleBudget,
   runtimeCardInstances,
   runtimeCardTriangles,
+  crossedRuntimeInstances,
+  crossedRuntimeTriangles,
 });
