@@ -16,6 +16,7 @@ import {
   ensureBranchCardCacheEntryAtomic,
   disposeBranchCards,
   forestCardMaterial,
+  planBranchCardCrownUnderlay,
 } from './core/branch-cards.js';
 import { buildRocks } from './core/rocks.js';
 import { buildGrass } from './core/grass.js';
@@ -590,7 +591,8 @@ async function main() {
     if (!shaped.foliage || (shaped.foliage.leavesPerBranch ?? 1) <= 0) return null;
     // Mobile bakes EXTRA whole-limb card sets (its LOD3/LOD4 collapse limbs into
     // cards), so the toggle keys its own cache entry.
-    const key = `${species.name}|${shaped.foliage.size}|${shaped.foliage.leavesPerBranch}|${shaped.params.levels}|${optState.cardRes}|${optState.cardVariants}|${optState.mobileTarget ? 'm' : 'd'}|u${shaped.foliage.cardCrownUnderlay === true ? 1 : 0}|b${BRANCH_CARD_BAKE_REVISION}`;
+    const crownUnderlayPlan = planBranchCardCrownUnderlay(shaped.foliage, 1);
+    const key = `${species.name}|${shaped.foliage.size}|${shaped.foliage.leavesPerBranch}|${shaped.params.levels}|${optState.cardRes}|${optState.cardVariants}|${optState.mobileTarget ? 'm' : 'd'}|u${crownUnderlayPlan.enabled ? 1 : 0}x${crownUnderlayPlan.lateralScale}|b${BRANCH_CARD_BAKE_REVISION}`;
     let cards = cardCache.get(key);
     if (cards) return cards;
     const assets = assetCache.get(species.name);
@@ -601,7 +603,7 @@ async function main() {
     // set; mobile adds the two collapse sets (per-twig full + one-level-up limbs).
     const maxLevel = (shaped.params.levels ?? 3) - 1;
     const jobs = [{ level: maxLevel, foliageOnly: true }];
-    if (shaped.foliage.cardCrownUnderlay === true) {
+    if (crownUnderlayPlan.enabled) {
       // One foliage-only whole-crown atlas supplies continuous interior mass
       // behind every card LOD. Preserve subtree layout and cap multi-root cost.
       jobs.push({
@@ -611,6 +613,7 @@ async function main() {
         preserveFoliageLayout: true,
         maxRoots: BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxRootCards,
         radialPlanes: BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.radialPlanes,
+        instanceCapacity: BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxRootCards,
         variants: 1,
         // The layer carries low-frequency interior mass; detailed limb cards
         // remain on top, so half resolution (floor 256) avoids atlas bloat.
@@ -635,6 +638,7 @@ async function main() {
           preserveFoliageLayout: job.preserveFoliageLayout,
           maxRoots: job.maxRoots,
           radialPlanes: job.radialPlanes,
+          instanceCapacity: job.instanceCapacity,
           // Limb-level sets place as crossed pairs — no flutter (it tears the pair).
           noFlutter: job.noFlutter ?? job.level < maxLevel,
         }),

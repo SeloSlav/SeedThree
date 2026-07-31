@@ -34,9 +34,15 @@ const TRANSMIT = [0.42, 0.62, 0.24];
 const SEASONAL_TREE_ORIGIN_Y_OFFSET = 2048;
 
 // Consumers with persistent branch-card atlases should include this revision in
-// their cache key. Revision 4 adds the opt-in whole-crown foliage underlay; its
-// atlas preserves subtree layout, unlike a straightened terminal-twig bake.
-export const BRANCH_CARD_BAKE_REVISION = 4;
+// their cache key. Revision 5 adds a bounded lateral scale to the opt-in
+// whole-crown underlay without changing its atlas, instance, draw, or triangle
+// counts. The scale still keys caches so persisted consumers cannot silently
+// retain pre-revision placement semantics.
+export const BRANCH_CARD_BAKE_REVISION = 5;
+// Placement/cache revisions must not reshuffle pixels inside the detailed
+// branch-card atlas. Keep this content stream pinned until the fill cohort
+// itself intentionally changes.
+export const BRANCH_CARD_COVERAGE_CONTENT_REVISION = 4;
 export const BRANCH_CARD_COVERAGE_DEFAULTS = Object.freeze({
   maxCoverage: 2,
   // Temporary bake-source cost only. With the default crossed-leaf geometry
@@ -55,11 +61,30 @@ export const BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS = Object.freeze({
   maxRootCards: 4,
   radialPlanes: 2,
   trianglesPerPlane: 2,
+  lateralScale: 1,
+  maxLateralScale: 1.35,
 });
+
+export function branchCardCoverageRngSeed(speciesName, variantIndex) {
+  return `${speciesName}:cards:${variantIndex}:coverage-v${BRANCH_CARD_COVERAGE_CONTENT_REVISION}`;
+}
+
+function boundedCrownUnderlayLateralScale(value) {
+  const requested = Number.isFinite(value)
+    ? value
+    : BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.lateralScale;
+  return Math.max(
+    BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.lateralScale,
+    Math.min(BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxLateralScale, requested),
+  );
+}
 
 /** Fixed runtime cost policy for the opt-in whole-crown continuity underlay. */
 export function planBranchCardCrownUnderlay(foliage = {}, rootStemCount = 0) {
   const enabled = foliage.cardCrownUnderlay === true;
+  const lateralScale = enabled
+    ? boundedCrownUnderlayLateralScale(foliage.cardCrownUnderlayLateralScale)
+    : BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.lateralScale;
   const availableRoots = Math.max(
     0,
     Math.floor(Number.isFinite(rootStemCount) ? rootStemCount : 0),
@@ -75,6 +100,7 @@ export function planBranchCardCrownUnderlay(foliage = {}, rootStemCount = 0) {
     availableRoots,
     rootCardInstances,
     radialPlanes: BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.radialPlanes,
+    lateralScale,
     runtimeTrianglesPerCard,
     runtimeTrianglesAdded: rootCardInstances * runtimeTrianglesPerCard,
     runtimeDrawsAdded: rootCardInstances > 0 ? 1 : 0,
@@ -385,7 +411,7 @@ function makeCardMaterial(t, centerUniform, opts = {}) {
  * @param {object} species  shaped species preset (params + foliage reflect GUI)
  * @param {object} assets   cached species assets (barkMat, leafMat, ...)
  * @param {object} opts     { size, variants, cardLevel, coverage,
- *                          extraTriangleBudget } — cardLevel defaults to the
+ *                          extraTriangleBudget, instanceCapacity } — cardLevel defaults to the
  *                          deepest level (per-twig cards); lower levels bake a
  *                          whole limb (branch + twigs + leaves) into one card.
  * @returns {Promise<{variants: Array, centerUniform} | null>}
@@ -394,6 +420,9 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
   if (!assets.leafMat || !assets.barkMat) return null;
   const variantCount = opts.variants ?? 3;
   const size = opts.size ?? 512;
+  const instanceCapacity = Number.isFinite(opts.instanceCapacity)
+    ? Math.max(1, Math.min(MAX_CARD_INSTANCES, Math.floor(opts.instanceCapacity)))
+    : MAX_CARD_INSTANCES;
   const radialPlanes = Number.isFinite(opts.radialPlanes)
     ? Math.max(
       1,
@@ -482,9 +511,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     });
     let coverageLeaves = null;
     if (coveragePlan.extraLeavesPerBranch > 0) {
-      const coverageRng = new Rng(
-        `${species.name}:cards:${vi}:coverage-v${BRANCH_CARD_BAKE_REVISION}`,
-      );
+      const coverageRng = new Rng(branchCardCoverageRngSeed(species.name, vi));
       coverageLeaves = buildFoliage(
         bakeStems,
         { ...foliageCfg, leavesPerBranch: coveragePlan.extraLeavesPerBranch },
@@ -544,13 +571,13 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
 
     const geometry = cardQuadGeometry(center, halfW, halfH, radialPlanes);
     geometry.userData.shared = true; // disposeTree must NOT free cached card geometry
-    addThicknessAttribute(geometry, MAX_CARD_INSTANCES, thicknessRng);
+    addThicknessAttribute(geometry, instanceCapacity, thicknessRng);
     // per-instance wind heading×weight + anchor point (sway phase) — values
     // written per rebuild by buildCardFoliage. Weight is PACKED into aWindVec:
     // WebGPU caps pipelines at 8 vertex buffers and the forest twin (which
     // adds aTreeOrigin) sits exactly at that limit.
-    geometry.setAttribute('aWindVec', new InstancedBufferAttribute(new Float32Array(MAX_CARD_INSTANCES * 3), 3));
-    geometry.setAttribute('aAnchorPos', new InstancedBufferAttribute(new Float32Array(MAX_CARD_INSTANCES * 3), 3));
+    geometry.setAttribute('aWindVec', new InstancedBufferAttribute(new Float32Array(instanceCapacity * 3), 3));
+    geometry.setAttribute('aAnchorPos', new InstancedBufferAttribute(new Float32Array(instanceCapacity * 3), 3));
     variants.push({
       geometry,
       material: makeCardMaterial(baked, centerUniform, { noFlutter: opts.noFlutter }),
@@ -583,6 +610,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
       radialPlanes,
       runtimeTrianglesPerCard:
         radialPlanes * BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.trianglesPerPlane,
+      instanceCapacity,
     },
   };
 }
@@ -597,6 +625,11 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
 export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
   const grow = opts.growScale ?? 1.2;
   const keep = opts.keepFraction ?? 1;
+  // Whole-crown underlays can widen their low-frequency mass without growing
+  // taller or multiplying foliage. Clamp here as well as in the planner so
+  // direct/reusable callers retain the same fixed performance and silhouette
+  // policy even when they bypass planBranchCardCrownUnderlay.
+  const lateralScale = boundedCrownUnderlayLateralScale(opts.lateralScale);
   // Whole-limb cards (mobile far rungs) place a CROSSED PAIR per limb, like the
   // final billboard. One flat quad per TWIG can vanish edge-on because hundreds of
   // neighbours at random rolls cover for it — but a lone LIMB card IS the canopy
@@ -683,13 +716,21 @@ export function buildCardFoliage(terminalStems, cards, rng, opts = {}) {
       // twig is invisible next to wrong-sized leaves.
       let s = (refLen / variant.chordLen) * grow;
       if (cards.foliageOnly) s = Math.min(1.15, Math.max(0.75, s));
-      scl.set(s, s, s);
+      scl.set(s * lateralScale, s, s * lateralScale);
       for (let ci = 0; ci < copies; ci++) { // crossed pair: twin at 90°
         qRoll.setFromAxisAngle(Y, roll + ci * Math.PI / 2);
         q.copy(qChord).multiply(qRoll);
         // wind heading×weight in card-local space + anchor for sway phase (wind.js)
         qInv.copy(q).invert();
-        wv.copy(WIND_DIR).applyQuaternion(qInv).multiplyScalar(weight / s);
+        // Undo the full nonuniform instance scale in local space. This keeps
+        // world-space sway amplitude identical when an underlay widens; the old
+        // weight/s shortcut remains mathematically identical at lateralScale=1.
+        wv.copy(WIND_DIR).applyQuaternion(qInv);
+        wv.set(
+          wv.x * weight / scl.x,
+          wv.y * weight / scl.y,
+          wv.z * weight / scl.z,
+        );
         windVecAttr.setXYZ(k, wv.x, wv.y, wv.z);
         anchorAttr.setXYZ(k, pos.x, pos.y, pos.z);
         weights[k] = weight;

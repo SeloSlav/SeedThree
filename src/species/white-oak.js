@@ -36,6 +36,7 @@ export const whiteOak = {
     cardCoverage: 1.5,
     cardRadialPlanes: 2,
     cardCrownUnderlay: true,
+    cardCrownUnderlayLateralScale: 1.15,
     mobileNearTwigCollapse: true,
     size: 0.6,
     downAngle: 52,

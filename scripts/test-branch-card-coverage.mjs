@@ -3,14 +3,18 @@ import {
   BufferAttribute,
   BufferGeometry,
   InstancedBufferAttribute,
+  Matrix4,
   MeshBasicNodeMaterial,
+  Quaternion,
   Vector3,
 } from 'three/webgpu';
 import {
   BRANCH_CARD_BAKE_REVISION,
+  BRANCH_CARD_COVERAGE_CONTENT_REVISION,
   BRANCH_CARD_COVERAGE_DEFAULTS,
   BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS,
   BRANCH_CARD_LIVE_COVERAGE_DEFAULTS,
+  branchCardCoverageRngSeed,
   buildCardFoliage,
   disposeBranchCards,
   ensureBranchCardCacheEntryAtomic,
@@ -19,6 +23,7 @@ import {
   prepareBranchCardFoliageStems,
 } from '../src/core/branch-cards.js';
 import { Rng } from '../src/core/rng.js';
+import { WIND_DIR } from '../src/core/wind.js';
 import { americanBeech } from '../src/species/american-beech.js';
 import { apple } from '../src/species/apple.js';
 import { cherry } from '../src/species/cherry.js';
@@ -30,7 +35,17 @@ import { sweetgum } from '../src/species/sweetgum.js';
 import { tulipPoplar } from '../src/species/tulip-poplar.js';
 import { whiteOak } from '../src/species/white-oak.js';
 
-assert.equal(BRANCH_CARD_BAKE_REVISION, 4);
+assert.equal(BRANCH_CARD_BAKE_REVISION, 5);
+assert.equal(BRANCH_CARD_COVERAGE_CONTENT_REVISION, 4);
+const coverageSeed = branchCardCoverageRngSeed('White Oak', 2);
+assert.equal(coverageSeed, 'White Oak:cards:2:coverage-v4');
+const rev5CoverageStream = new Rng(coverageSeed);
+const legacyRev4CoverageStream = new Rng('White Oak:cards:2:coverage-v4');
+assert.deepEqual(
+  Array.from({ length: 16 }, () => rev5CoverageStream.next()),
+  Array.from({ length: 16 }, () => legacyRev4CoverageStream.next()),
+  'placement/cache rev5 must preserve the detailed rev4 coverage-fill layout',
+);
 
 const broadleaves = [
   americanBeech,
@@ -41,6 +56,15 @@ const broadleaves = [
   tulipPoplar,
   whiteOak,
 ];
+const expectedBroadleafLateralScales = new Map([
+  ['American Beech', 1.15],
+  ['Cultivated Apple', 1.15],
+  ['Sweet Cherry', 1.17],
+  ['Red Maple', 1.17],
+  ['Sweetgum', 1.2],
+  ['Tulip Poplar', 1.2],
+  ['White Oak', 1.15],
+]);
 const measurements = [];
 for (const species of broadleaves) {
   const first = planBranchCardCoverage(species.foliage, 12);
@@ -64,6 +88,11 @@ for (const species of broadleaves) {
   );
   assert.equal(species.foliage.cardCrownUnderlay, true);
   assert.equal(crownUnderlay.enabled, true);
+  assert.equal(
+    crownUnderlay.lateralScale,
+    expectedBroadleafLateralScales.get(species.name),
+    `${species.name} must retain its morphology-specific restrained widening`,
+  );
   assert.equal(crownUnderlay.runtimeTrianglesPerCard, 4);
   assert.equal(crownUnderlay.runtimeDrawsAdded, 1);
   measurements.push({
@@ -74,14 +103,23 @@ for (const species of broadleaves) {
     extraBakeTrianglesAt12Twigs: first.extraBakeTriangles,
     crownUnderlayCards: crownUnderlay.rootCardInstances,
     crownUnderlayTriangles: crownUnderlay.runtimeTrianglesAdded,
+    crownUnderlayLateralScale: crownUnderlay.lateralScale,
   });
 }
 
 for (const conifer of [douglasFir, loblolly, pine]) {
   const crownUnderlay = planBranchCardCrownUnderlay(conifer.foliage, 1);
-  assert.equal(crownUnderlay.enabled, false, `${conifer.name} must retain conifer behavior`);
-  assert.equal(crownUnderlay.runtimeTrianglesAdded, 0);
-  assert.equal(crownUnderlay.runtimeDrawsAdded, 0);
+  assert.equal(crownUnderlay.enabled, true, `${conifer.name} must opt into crown mass`);
+  assert.equal(crownUnderlay.lateralScale, 1.2);
+  assert.equal(crownUnderlay.rootCardInstances, 1);
+  assert.equal(crownUnderlay.runtimeTrianglesAdded, 4);
+  assert.equal(crownUnderlay.runtimeDrawsAdded, 1);
+  measurements.push({
+    species: conifer.name,
+    crownUnderlayCards: crownUnderlay.rootCardInstances,
+    crownUnderlayTriangles: crownUnderlay.runtimeTrianglesAdded,
+    crownUnderlayLateralScale: crownUnderlay.lateralScale,
+  });
 }
 
 const excessiveRoots = planBranchCardCrownUnderlay({ cardCrownUnderlay: true }, 99);
@@ -91,6 +129,23 @@ assert.equal(
   'whole-crown runtime instances must remain bounded for multi-root inputs',
 );
 assert.equal(excessiveRoots.runtimeTrianglesAdded, 16);
+const excessiveScale = planBranchCardCrownUnderlay({
+  cardCrownUnderlay: true,
+  cardCrownUnderlayLateralScale: 99,
+}, 1);
+assert.equal(
+  excessiveScale.lateralScale,
+  BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxLateralScale,
+  'whole-crown lateral scale must stay inside the fixed silhouette bound',
+);
+assert.equal(
+  planBranchCardCrownUnderlay({
+    cardCrownUnderlay: false,
+    cardCrownUnderlayLateralScale: 1.3,
+  }, 1).lateralScale,
+  BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.lateralScale,
+  'disabled underlays must retain compatibility scale',
+);
 
 const laidOutStems = [{
   points: [new Vector3(2, 0, -1), new Vector3(3, 1, -2)],
@@ -275,6 +330,33 @@ const underlayTriangles = underlayFoliage.children.reduce(
 assert.equal(underlayInstances, excessiveRoots.rootCardInstances);
 assert.equal(underlayTriangles, excessiveRoots.runtimeTrianglesAdded);
 
+const widenedUnderlay = buildCardFoliage(
+  runtimeStems.slice(0, 1),
+  crossedRuntimeCards,
+  new Rng('branch-card-crown-underlay-lateral-clamp'),
+  { growScale: 1, keepFraction: 1, crossed: true, lateralScale: 99 },
+);
+const widenedMesh = widenedUnderlay.children[0];
+const widenedMatrix = new Matrix4();
+const widenedPosition = new Vector3();
+const widenedRotation = new Quaternion();
+const widenedScale = new Vector3();
+widenedMesh.getMatrixAt(0, widenedMatrix);
+widenedMatrix.decompose(widenedPosition, widenedRotation, widenedScale);
+assert.ok(Math.abs(widenedScale.x - BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxLateralScale) < 1e-6);
+assert.ok(Math.abs(widenedScale.y - 1) < 1e-6, 'underlay widening must preserve crown height');
+assert.ok(Math.abs(widenedScale.z - BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxLateralScale) < 1e-6);
+const localWind = new Vector3().fromBufferAttribute(
+  widenedMesh.geometry.attributes.aWindVec,
+  0,
+);
+const reconstructedWorldWind = localWind.multiply(widenedScale).applyQuaternion(widenedRotation);
+const expectedWorldWind = WIND_DIR.clone().multiplyScalar(0.8);
+assert.ok(
+  reconstructedWorldWind.distanceTo(expectedWorldWind) < 1e-6,
+  'nonuniform crown widening must preserve world-space wind direction and amplitude',
+);
+
 const atomicJobs = [
   { level: 2, foliageOnly: true },
   { key: '0:underlay', level: 0, foliageOnly: true },
@@ -302,7 +384,7 @@ const makeAtomicEntry = (byLevel) => {
 let atomicAttempt = 0;
 const ensureInjectedAtomicEntry = () => ensureBranchCardCacheEntryAtomic(
   atomicCache,
-  'b4:u1',
+  'b5:u1x1.2',
   atomicJobs,
   async (_job, jobKey) => {
     if (atomicAttempt === 0 && jobKey === '0:underlay') return null;
@@ -324,10 +406,10 @@ assert.deepEqual(
 
 atomicAttempt++;
 const retriedEntry = await ensureInjectedAtomicEntry();
-assert.equal(atomicCache.get('b4:u1'), retriedEntry, 'a later call must retry and cache success');
+assert.equal(atomicCache.get('b5:u1x1.2'), retriedEntry, 'a later call must retry and cache success');
 const cachedEntry = await ensureBranchCardCacheEntryAtomic(
   atomicCache,
-  'b4:u1',
+  'b5:u1x1.2',
   atomicJobs,
   async () => { throw new Error('cached entry must not rebake'); },
   makeAtomicEntry,

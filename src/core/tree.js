@@ -500,7 +500,12 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
           rootStems.slice(0, crownUnderlayPlan.rootCardInstances),
           underlaySet,
           new Rng(`${species.name}:${seed}:crown-underlay${i}`),
-          { growScale: 1, keepFraction: 1, crossed: true },
+          {
+            growScale: 1,
+            keepFraction: 1,
+            crossed: true,
+            lateralScale: crownUnderlayPlan.lateralScale,
+          },
         );
         if (underlay) {
           crownUnderlayInstances = underlay.children.reduce((n, c) => n + c.count, 0);
