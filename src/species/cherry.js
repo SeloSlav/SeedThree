@@ -20,6 +20,7 @@ export const cherry = {
     leavesPerBranch: 8,
     cardCoverage: 1.5,
     cardRadialPlanes: 2,
+    cardCrownUnderlay: true,
     mobileNearTwigCollapse: true,
     size: 0.22,
     downAngle: 48,

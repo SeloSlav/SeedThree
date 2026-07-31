@@ -34,9 +34,9 @@ const TRANSMIT = [0.42, 0.62, 0.24];
 const SEASONAL_TREE_ORIGIN_Y_OFFSET = 2048;
 
 // Consumers with persistent branch-card atlases should include this revision in
-// their cache key. Revision 3 adds opt-in radial card planes to the persisted
-// geometry while retaining the revision-2 bake-only coverage cohort below.
-export const BRANCH_CARD_BAKE_REVISION = 3;
+// their cache key. Revision 4 adds the opt-in whole-crown foliage underlay; its
+// atlas preserves subtree layout, unlike a straightened terminal-twig bake.
+export const BRANCH_CARD_BAKE_REVISION = 4;
 export const BRANCH_CARD_COVERAGE_DEFAULTS = Object.freeze({
   maxCoverage: 2,
   // Temporary bake-source cost only. With the default crossed-leaf geometry
@@ -49,6 +49,84 @@ export const BRANCH_CARD_LIVE_COVERAGE_DEFAULTS = Object.freeze({
   maxRadialPlanes: 2,
   trianglesPerPlane: 2,
 });
+export const BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS = Object.freeze({
+  // Multi-leader species may need one crown card per root. Keep authored or
+  // generated outliers from turning the underlay into an unbounded cohort.
+  maxRootCards: 4,
+  radialPlanes: 2,
+  trianglesPerPlane: 2,
+});
+
+/** Fixed runtime cost policy for the opt-in whole-crown continuity underlay. */
+export function planBranchCardCrownUnderlay(foliage = {}, rootStemCount = 0) {
+  const enabled = foliage.cardCrownUnderlay === true;
+  const availableRoots = Math.max(
+    0,
+    Math.floor(Number.isFinite(rootStemCount) ? rootStemCount : 0),
+  );
+  const rootCardInstances = enabled
+    ? Math.min(BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.maxRootCards, availableRoots)
+    : 0;
+  const runtimeTrianglesPerCard = BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.radialPlanes
+    * BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.trianglesPerPlane;
+  return {
+    bakeRevision: BRANCH_CARD_BAKE_REVISION,
+    enabled,
+    availableRoots,
+    rootCardInstances,
+    radialPlanes: BRANCH_CARD_CROWN_UNDERLAY_DEFAULTS.radialPlanes,
+    runtimeTrianglesPerCard,
+    runtimeTrianglesAdded: rootCardInstances * runtimeTrianglesPerCard,
+    runtimeDrawsAdded: rootCardInstances > 0 ? 1 : 0,
+  };
+}
+
+/**
+ * Bake a required set of branch-card jobs as one transaction. Nothing escapes
+ * until every job succeeds; a thrown error or null set releases all completed
+ * atlases/geometry/materials so callers can safely leave their cache untouched
+ * and retry later.
+ */
+export async function bakeBranchCardSetsAtomic(jobs, bakeJob) {
+  const byLevel = new Map();
+  try {
+    for (const job of jobs) {
+      const jobKey = job.key ?? `${job.level}:${job.foliageOnly ? 'fol' : 'full'}`;
+      if (byLevel.has(jobKey)) continue;
+      const set = await bakeJob(job, jobKey);
+      if (!set) {
+        throw new Error(`required branch-card bake "${jobKey}" returned no card set`);
+      }
+      byLevel.set(jobKey, set);
+    }
+    return byLevel;
+  } catch (error) {
+    disposeBranchCards({ byLevel });
+    throw error;
+  }
+}
+
+/** Cache only a fully assembled atomic card-set transaction. */
+export async function ensureBranchCardCacheEntryAtomic(
+  cache,
+  cacheKey,
+  jobs,
+  bakeJob,
+  createEntry,
+) {
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+  const byLevel = await bakeBranchCardSetsAtomic(jobs, bakeJob);
+  try {
+    const entry = createEntry(byLevel);
+    if (!entry) throw new Error('required branch-card facade could not be assembled');
+    cache.set(cacheKey, entry);
+    return entry;
+  } catch (error) {
+    disposeBranchCards({ byLevel });
+    throw error;
+  }
+}
 
 const chordVec = (stem, out) =>
   out.copy(stem.points[stem.points.length - 1]).sub(stem.points[0]);
@@ -189,6 +267,27 @@ function rebaseSubtree(subtree, root) {
   }));
 }
 
+/**
+ * Prepare leaf-bearing stems for a card bake. Foliage-only twig cards are
+ * straightened onto their placement axis; whole-crown underlays retain the
+ * rebased subtree coordinates that carry the crown's lateral/depth envelope.
+ */
+export function prepareBranchCardFoliageStems(leafStems, opts = {}) {
+  if (!opts.foliageOnly || opts.preserveFoliageLayout) return leafStems;
+  return leafStems.map((s) => {
+    let acc = 0;
+    const points = s.points.map((p, index) => {
+      if (index > 0) acc += p.distanceTo(s.points[index - 1]);
+      return new Vector3(0, acc, 0);
+    });
+    return {
+      ...s,
+      points,
+      orients: s.orients.map(() => new Quaternion()),
+    };
+  });
+}
+
 // Single quad spanning the bake framing, in the SAME stem-local space (origin =
 // stem base) so instance transforms are just (base position, chord rotation, scale).
 function resolveRadialPlanes(foliage = {}) {
@@ -295,7 +394,15 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
   if (!assets.leafMat || !assets.barkMat) return null;
   const variantCount = opts.variants ?? 3;
   const size = opts.size ?? 512;
-  const radialPlanes = resolveRadialPlanes(species.foliage);
+  const radialPlanes = Number.isFinite(opts.radialPlanes)
+    ? Math.max(
+      1,
+      Math.min(
+        BRANCH_CARD_LIVE_COVERAGE_DEFAULTS.maxRadialPlanes,
+        Math.round(opts.radialPlanes),
+      ),
+    )
+    : resolveRadialPlanes(species.foliage);
 
   // Fixed exemplar seed → deterministic cards independent of the live tree seed.
   const rng = new Rng(`${species.name}:cards`);
@@ -309,7 +416,10 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
   const maxLevel = stems[0]?.maxLevel ?? 0;
   const cardLevel = opts.cardLevel ?? maxLevel;
   const byParent = childrenMap(stems);
-  const roots = stems.filter((s) => s.level === cardLevel && s.points.length >= 2 && chordVec(s, v).lengthSq() > 1e-4);
+  let roots = stems.filter((s) => s.level === cardLevel && s.points.length >= 2 && chordVec(s, v).lengthSq() > 1e-4);
+  if (Number.isFinite(opts.maxRoots)) {
+    roots = roots.slice(0, Math.max(0, Math.floor(opts.maxRoots)));
+  }
   if (!roots.length) return null;
 
   // Exemplars from spread ARC-length percentiles — variety without atlas bloat.
@@ -351,11 +461,10 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     // leaves.) Straight along the chord, the leaves hug the real twig underneath
     // — which the mobile near LOD decimates to its chord anyway.
     const leafStems = subTerminals.length ? subTerminals : sub;
-    const bakeStems = !opts.foliageOnly ? leafStems : leafStems.map((s) => {
-      let acc = 0;
-      const pts = s.points.map((p, j) => { if (j > 0) acc += p.distanceTo(s.points[j - 1]); return new Vector3(0, acc, 0); });
-      return { ...s, points: pts, orients: s.orients.map(() => new Quaternion()) };
-    });
+    // A whole-crown foliage underlay must preserve every terminal's position in
+    // the subtree. Straightening is only correct for a foliage-only TWIG card;
+    // applying it to a crown collapses all lateral/depth structure onto one pole.
+    const bakeStems = prepareBranchCardFoliageStems(leafStems, opts);
     const foliageCfg = {
       ...(species.foliage || {}),
       mode: 'leaves',
@@ -454,6 +563,7 @@ export async function bakeBranchCards(renderer, species, assets, opts = {}) {
     variants,
     centerUniform,
     foliageOnly: !!opts.foliageOnly,
+    preserveFoliageLayout: !!opts.preserveFoliageLayout,
     telemetry: {
       bakeRevision: BRANCH_CARD_BAKE_REVISION,
       coverage: coverageTelemetry,

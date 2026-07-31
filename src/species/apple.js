@@ -20,6 +20,7 @@ export const apple = {
     leavesPerBranch: 9,
     cardCoverage: 1.5,
     cardRadialPlanes: 2,
+    cardCrownUnderlay: true,
     mobileNearTwigCollapse: true,
     size: 0.24,
     downAngle: 54,

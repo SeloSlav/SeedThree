@@ -14,6 +14,7 @@ export const tulipPoplar = {
   foliage: {
     mode: 'leaves', clustersPerBranch: 3, clusterSize: 1.2, clusterSizeVar: 0.3, clusterQuads: 2,
     tint: 0xcfe8b4, leavesPerBranch: 7, cardCoverage: 1.5, cardRadialPlanes: 2,
+    cardCrownUnderlay: true,
     mobileNearTwigCollapse: true, size: 0.6, downAngle: 48, bend: 0,
     trunkClearRadius: 0.8, // keep leaves off the long clear bole (height-tapered)
   },
