@@ -184,13 +184,14 @@ assert.equal(
   'default slices must preserve deterministic matrix output',
 );
 
-const deadlineNear = makeLodSet(16);
-const deadlineOverview = makeLodSet(16);
+const deadlineSlotCount = DEFAULT_INSTANCE_MATRIX_DEADLINE_CHECK_INTERVAL + 16;
+const deadlineNear = makeLodSet(deadlineSlotCount);
+const deadlineOverview = makeLodSet(deadlineSlotCount);
 deadlineNear.branches.count = 7;
 deadlineNear.cards[0].count = 7;
 deadlineOverview.branches.count = 3;
 deadlineOverview.cards[0].count = 3;
-const deadlineSlots = Array.from({ length: 16 }, (_, index) => ({
+const deadlineSlots = Array.from({ length: deadlineSlotCount }, (_, index) => ({
   matrix: new Matrix4().makeTranslation(index, 0, 0),
   pos: new Vector3(index, 0, 0),
   enabled: true,
@@ -297,6 +298,7 @@ const headroomResult = runInstanceMatrixWriteSlices(headroomJob, {
   deadlineMs: 1,
   minimumChunkHeadroomMs: 0.2,
   maxMatrixWritesPerChunk: 128,
+  deadlineCheckInterval: 1,
   now: () => {
     headroomSample++;
     return headroomSample < 36 ? 0 : 0.85;

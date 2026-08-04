@@ -21,7 +21,7 @@ export const cherry = {
     cardCoverage: 1.5,
     cardRadialPlanes: 2,
     cardCrownUnderlay: true,
-    cardCrownUnderlayLateralScale: 1.17,
+    cardCrownUnderlayLateralScale: 1.3,
     mobileNearTwigCollapse: true,
     size: 0.22,
     downAngle: 48,

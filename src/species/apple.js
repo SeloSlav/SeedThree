@@ -21,7 +21,7 @@ export const apple = {
     cardCoverage: 1.5,
     cardRadialPlanes: 2,
     cardCrownUnderlay: true,
-    cardCrownUnderlayLateralScale: 1.15,
+    cardCrownUnderlayLateralScale: 1.35,
     mobileNearTwigCollapse: true,
     size: 0.24,
     downAngle: 54,

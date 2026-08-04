@@ -57,13 +57,13 @@ const broadleaves = [
   whiteOak,
 ];
 const expectedBroadleafLateralScales = new Map([
-  ['American Beech', 1.15],
-  ['Cultivated Apple', 1.15],
-  ['Sweet Cherry', 1.17],
-  ['Red Maple', 1.17],
-  ['Sweetgum', 1.2],
-  ['Tulip Poplar', 1.2],
-  ['White Oak', 1.15],
+  ['American Beech', 1.35],
+  ['Cultivated Apple', 1.35],
+  ['Sweet Cherry', 1.3],
+  ['Red Maple', 1.3],
+  ['Sweetgum', 1.28],
+  ['Tulip Poplar', 1.28],
+  ['White Oak', 1.35],
 ]);
 const measurements = [];
 for (const species of broadleaves) {
@@ -110,7 +110,7 @@ for (const species of broadleaves) {
 for (const conifer of [douglasFir, loblolly, pine]) {
   const crownUnderlay = planBranchCardCrownUnderlay(conifer.foliage, 1);
   assert.equal(crownUnderlay.enabled, true, `${conifer.name} must opt into crown mass`);
-  assert.equal(crownUnderlay.lateralScale, 1.2);
+  assert.equal(crownUnderlay.lateralScale, 1.35);
   assert.equal(crownUnderlay.rootCardInstances, 1);
   assert.equal(crownUnderlay.runtimeTrianglesAdded, 4);
   assert.equal(crownUnderlay.runtimeDrawsAdded, 1);
