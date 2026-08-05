@@ -7,7 +7,7 @@ export const cherry = {
   name: 'Sweet Cherry',
   latin: 'Prunus avium',
   bark: 'cherry_bark_albedo.png',
-  leaf: 'red_maple_single_albedo.png',
+  leaf: 'cherry_single_albedo.png',
   biome: 'temperate',
   controls: broadleafControls,
   foliage: {
