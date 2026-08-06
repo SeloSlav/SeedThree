@@ -13,7 +13,8 @@
     "preview": "vite preview --port 5390",
     "test:branch-card-coverage": "node scripts/test-branch-card-coverage.mjs",
     "test:forest-edge-band": "node scripts/test-forest-edge-band.mjs",
-    "test:ground-cover-shadows": "node scripts/test-ground-cover-shadows.mjs"
+    "test:ground-cover-shadows": "node scripts/test-ground-cover-shadows.mjs",
+    "test:botanical-vegetation": "node scripts/test-species-morphology.mjs && node scripts/test-wildflower-assets.mjs"
   },
   "dependencies": {
     "lil-gui": "^0.21.0",

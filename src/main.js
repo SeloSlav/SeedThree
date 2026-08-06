@@ -26,7 +26,7 @@ import { windStrength, windSpeed, sunDirectionUniform, WIND_DIR } from './core/w
 import { Rng } from './core/rng.js';
 import { downloadGLB } from './core/export-glb.js';
 import { SPECIES, DEFAULT_SPECIES } from './species/index.js';
-import { barkUrl, leafUrl, groundUrl } from './core/textures.js';
+import { barkUrl, leafUrl, groundUrl, wildflowerUrl } from './core/textures.js';
 import { controlsFromSpecies, applySpeciesControls, buildGUI } from './ui/controls.js';
 import { mountPanelFX } from './ui/panel-fx.js';
 import { mountAmbience } from './audio/ambience.js';
@@ -488,14 +488,22 @@ async function main() {
       count: (species.biome ?? 'temperate') === 'desert' ? 44 : 32,
     }));
     if (!isDesert) {
-      const [tuftTexture, tuftNormal, tuftRoughness] = await Promise.all([
+      const [tuftTexture, tuftNormal, tuftRoughness, wildflowerAtlas] = await Promise.all([
         loadTex(leafUrl('grass_tuft.png'), true),                       // foliage cards live in assets/leaves/ now
         loadTex(leafUrl('grass_tuft_normal.png'), false).catch(() => null),
         loadTex(leafUrl('grass_tuft_roughness.png'), false).catch(() => null),
+        loadTex(wildflowerUrl('gorski-kotar-wildflower-atlas.png'), true),
       ]);
       const grass = buildGrass({ tuftTexture, tuftNormal, tuftRoughness, sampler, seed: state.controls.seed, flatRadius: 15 });
       if (grass) group.add(grass);
-      group.add(buildWildflowers({ sampler, seed: state.controls.seed, flatRadius: 15 }));
+      wildflowerAtlas.wrapS = wildflowerAtlas.wrapT = THREE.ClampToEdgeWrapping;
+      const wildflowers = buildWildflowers({
+        atlasTexture: wildflowerAtlas,
+        sampler,
+        seed: state.controls.seed,
+        flatRadius: 15,
+      });
+      if (wildflowers) group.add(wildflowers);
     } else {
       // Desert scrub in place of grass: sagebrush / blackbrush / creosote alpha
       // cards (skipped gracefully until Codex paints them).

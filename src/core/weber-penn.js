@@ -80,6 +80,13 @@ const DEFAULTS = {
   twist:     [0, 0, 0, 0],       // axial roll (radians) accumulated per section, per level
 
   branches:  [0, 30, 12, 0],    // children spawned by a stem at [level]
+  // Optional rhythmic growth: group children into vertically separated annual
+  // tiers. `branchTierSpread` is the fraction of one tier interval occupied by
+  // the children inside each tier (0 = one exact node, 1 = fully distributed).
+  // Most broadleaves leave this disabled; species such as Prunus avium use it
+  // to express stop-start leader growth instead of an even bottlebrush.
+  branchTiers:      [0, 0, 0, 0],
+  branchTierSpread: [0, 1, 1, 1],
   // 0 = children distributed along the parent (broadleaf); 1 = children spawn
   // in the parent's last ~10% — dichotomous Y-forks (yucca, dragon tree).
   tipCluster: [0, 0, 0, 0],
@@ -273,6 +280,20 @@ function buildStem({ level, origin, orient, length, radius, p, rng, stems, tips,
 
   for (let c = 0; c < nChildren; c++) {
     let frac = offsetStart + (1 - offsetStart) * ((c + 0.5) / nChildren);
+    const tierCount = Math.max(0, Math.min(nChildren, p.branchTiers?.[childLevel] | 0));
+    if (tierCount > 0) {
+      // Partition children as evenly as possible among tier centers, preserving
+      // deterministic parent-before-child order and phyllotactic azimuths.
+      const tierIndex = Math.min(tierCount - 1, Math.floor((c * tierCount) / nChildren));
+      const tierStart = Math.ceil((tierIndex * nChildren) / tierCount);
+      const tierEnd = Math.ceil(((tierIndex + 1) * nChildren) / tierCount);
+      const tierMembers = Math.max(1, tierEnd - tierStart);
+      const member = c - tierStart;
+      const withinTier = (member + 0.5) / tierMembers - 0.5;
+      const spread = Math.max(0, Math.min(1, p.branchTierSpread?.[childLevel] ?? 0.25));
+      const tierPosition = (tierIndex + 0.5 + withinTier * spread) / tierCount;
+      frac = offsetStart + (1 - offsetStart) * tierPosition;
+    }
     // Tip clustering: children spawn AT the parent's tip (frac→1) so they
     // emanate from one point and cover the parent's open tube end — no bare
     // spike above the fork.

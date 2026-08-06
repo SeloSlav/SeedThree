@@ -12,6 +12,9 @@ const leafModules = import.meta.glob('/assets/leaves/*.png', {
 const groundModules = import.meta.glob('/assets/ground/*.png', {
   eager: true, query: '?url', import: 'default',
 });
+const wildflowerModules = import.meta.glob('/assets/wildflowers/*.png', {
+  eager: true, query: '?url', import: 'default',
+});
 const skyModules = import.meta.glob('/assets/sky/*.png', {
   eager: true, query: '?url', import: 'default',
 });
@@ -27,6 +30,7 @@ function byBasename(modules) {
 export const barkUrls = byBasename(barkModules);
 export const leafUrls = byBasename(leafModules);
 export const groundUrls = byBasename(groundModules);
+export const wildflowerUrls = byBasename(wildflowerModules);
 export const skyUrls = byBasename(skyModules);
 
 export function groundUrl(name) {
@@ -50,5 +54,11 @@ export function barkUrl(name) {
 export function leafUrl(name) {
   const url = leafUrls[name];
   if (!url) console.warn(`[textures] leaf "${name}" not found; have: ${Object.keys(leafUrls).join(', ')}`);
+  return url;
+}
+
+export function wildflowerUrl(name) {
+  const url = wildflowerUrls[name];
+  if (!url) console.warn(`[textures] wildflower "${name}" not found; have: ${Object.keys(wildflowerUrls).join(', ')}`);
   return url;
 }
