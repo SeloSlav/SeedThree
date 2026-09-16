@@ -11,6 +11,14 @@ import { loblolly } from './loblolly.js';
 import { douglasFir } from './douglas-fir.js';
 import { apple } from './apple.js';
 import { cherry } from './cherry.js';
+import { pear } from './pear.js';
+import { aronia } from './aronia.js';
+import { rosehip } from './rosehip.js';
+import { bilberry } from './bilberry.js';
+import { commonJuniper } from './common-juniper.js';
+import { raspberry } from './raspberry.js';
+import { commonHornbeamHedge } from './common-hornbeam-hedge.js';
+import { stingingNettle } from './stinging-nettle.js';
 
 export const SPECIES = {
   whiteOak,
@@ -23,6 +31,14 @@ export const SPECIES = {
   douglasFir,
   apple,
   cherry,
+  pear,
+  aronia,
+  rosehip,
+  bilberry,
+  commonJuniper,
+  raspberry,
+  commonHornbeamHedge,
+  stingingNettle,
   joshuaTree,
   saguaro,
 };

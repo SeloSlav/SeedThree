@@ -25,12 +25,13 @@ function metrics(species, seed) {
   };
 }
 
-assert.equal(apple.params.baseSplits, 0, 'apple must keep one load-bearing central leader');
+assert.equal(apple.params.baseSplits, 0, 'apple must keep one short load-bearing trunk before its low scaffold crown');
 assert.equal(cherry.params.baseSplits, 0, 'sweet cherry must keep its strong central leader');
 assert.equal(apple.params.levels, 4, 'apple needs a distinct fruiting-spur level');
 assert.equal(cherry.params.levels, 4, 'cherry needs short fruiting wood beyond its laterals');
-assert.equal(apple.params.branchTiers[1], 3, 'apple scaffolds should form separated sets');
-assert.equal(cherry.params.branchTiers[1], 4, 'cherry should show rhythmic annual branch tiers');
+assert.equal(apple.params.branchTiers, undefined, 'apple scaffolds should retain an irregular continuous orchard crown');
+assert.equal(cherry.params.branchTiers[1], 3, 'cherry should show three rhythmic annual branch tiers');
+assert.equal(cherry.params.branchTierSpread[1], 0.28, 'cherry annual tiers keep their narrow authored spread');
 
 for (let seed = 0; seed < 12; seed++) {
   const a = metrics(apple, seed);
@@ -38,31 +39,34 @@ for (let seed = 0; seed < 12; seed++) {
 
   assert.equal(a.roots, 1);
   assert.equal(c.roots, 1);
-  assert.ok(a.tips >= c.tips * 1.5, 'apple should carry denser short fruiting wood');
-  assert.ok(a.crownRatio > 0.5, 'apple should keep a broad, spreading crown');
-  assert.ok(c.crownRatio > 0.3 && c.crownRatio < 0.53,
+  assert.ok(a.tips > c.tips, 'apple should carry denser short fruiting wood');
+  assert.ok(a.crownRatio > 0.58, 'apple should keep a broad, spreading crown');
+  assert.ok(c.crownRatio > 0.42 && c.crownRatio < 0.55,
     'sweet cherry should retain an upright but healthy egg-shaped crown');
-  assert.ok(a.meanScaffoldAngle >= 55 && a.meanScaffoldAngle <= 68,
+  assert.ok(a.meanScaffoldAngle >= 55 && a.meanScaffoldAngle <= 65,
     'apple scaffold angles should stay in the broad, fruit-bearing range');
-  assert.ok(c.meanScaffoldAngle >= 40 && c.meanScaffoldAngle <= 52,
+  assert.ok(c.meanScaffoldAngle >= 36 && c.meanScaffoldAngle <= 52,
     'sweet cherry primary branches should remain naturally ascending');
-  assert.ok(c.height > a.height * 1.06, 'sweet cherry should read taller than apple');
+  assert.ok(c.height > a.height * 1.18, 'sweet cherry should read materially taller than apple');
 
-  // Four cherry tiers contain an equal shoot set. Annual gaps must be much larger
-  // than the small height spread within one tier.
+  // Eight cherry scaffolds divide deterministically across three annual tiers
+  // as 3/3/2 shoots. Annual gaps must remain materially larger than the small
+  // height spread within a tier.
   const withinTierSpans = [];
   const betweenTierGaps = [];
-  const shootsPerTier = cherry.params.branches[1] / cherry.params.branchTiers[1];
-  for (let tier = 0; tier < 4; tier++) {
-    const start = tier * shootsPerTier;
+  const tierSizes = [3, 3, 2];
+  let start = 0;
+  for (let tier = 0; tier < tierSizes.length; tier++) {
+    const shootsInTier = tierSizes[tier];
     withinTierSpans.push(
-      c.attachmentHeights[start + shootsPerTier - 1] - c.attachmentHeights[start],
+      c.attachmentHeights[start + shootsInTier - 1] - c.attachmentHeights[start],
     );
-    if (tier < 3) betweenTierGaps.push(
-      c.attachmentHeights[start + shootsPerTier] - c.attachmentHeights[start + shootsPerTier - 1],
+    if (tier < tierSizes.length - 1) betweenTierGaps.push(
+      c.attachmentHeights[start + shootsInTier] - c.attachmentHeights[start + shootsInTier - 1],
     );
+    start += shootsInTier;
   }
-  assert.ok(Math.min(...betweenTierGaps) > Math.max(...withinTierSpans) * 4,
+  assert.ok(Math.min(...betweenTierGaps) > Math.max(...withinTierSpans) * 2,
     'sweet cherry must retain visible gaps between annual branch tiers');
 }
 

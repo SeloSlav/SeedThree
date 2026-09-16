@@ -18,10 +18,18 @@ export function createInstanceMatrixWriteJob(
   overviewSlotIndices,
   options = {},
 ) {
+  const additionalSelections = Array.isArray(options.additionalSelections)
+    ? options.additionalSelections
+    : [];
   return {
     tasks: [
       ...createMatrixWriteTasks(nearSet, slots, nearSlotIndices),
       ...createMatrixWriteTasks(overviewSet, slots, overviewSlotIndices),
+      ...additionalSelections.flatMap((selection) => createMatrixWriteTasks(
+        selection.lodSet,
+        slots,
+        selection.selectedSlotIndices,
+      )),
     ],
     taskIndex: 0,
     completed: false,

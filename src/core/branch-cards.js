@@ -796,6 +796,20 @@ export function forestCardMaterial(srcMat, opts = {}) {
   const occl = mix(float(1), analytic, treeOrigin.xz.length().smoothstep(float(60), float(90)));
   const texel = texture(srcMat.map);
   const dtMap = srcMat.userData.gltfDiffuseTransmission?.map;
+  // One shared node guarantees one filtered transmission lookup in the WGSL.
+  // Seasonal leaf classification and SSS previously constructed independent
+  // TextureNodes for the same texel, doubling this sample on dense broadleaf
+  // card overdraw without changing either result.
+  const transmission = dtMap ? texture(dtMap).r : null;
+  // Both seasonal leaf retention and settled snow need to distinguish foliage
+  // pixels from the twigs baked into the same card. Keep one shared mask so the
+  // two responses cannot disagree at card edges or add another texture sample.
+  const greenDominance = texel.g.sub(texel.r.max(texel.b));
+  const greenLeafMask = greenDominance.smoothstep(float(0.015), float(0.08));
+  const transmissionLeafMask = transmission
+    ? transmission.smoothstep(float(0.08), float(0.28))
+    : float(0);
+  const foliageMask = greenLeafMask.max(transmissionLeafMask);
   let seasonalRetain = float(1);
   let surfaceColor = texel.rgb;
   if (opts.seasonalDeciduous) {
@@ -807,15 +821,7 @@ export function forestCardMaterial(srcMat, opts = {}) {
     const springFlush = uniform(0);
     const autumnColor = uniform(0);
     const dormancy = uniform(0);
-    const greenDominance = texel.g.sub(texel.r.max(texel.b));
-    const greenLeafMask = greenDominance.smoothstep(float(0.015), float(0.08));
-    // The bake's transmission channel is authored by the source leaves and is
-    // absent on bark. It catches shadowed, neutral, and autumn-tinted leaf pixels
-    // that a green-only key misses while still retaining brown structural twigs.
-    const transmissionLeafMask = dtMap
-      ? texture(dtMap).r.smoothstep(float(0.08), float(0.28))
-      : float(0);
-    const leafMask = greenLeafMask.max(transmissionLeafMask).mul(deciduousInstance);
+    const leafMask = foliageMask.mul(deciduousInstance);
     const value = luminance(texel.rgb);
     const springLeaf = vec3(0.72, 1, 0.32).mul(value.mul(1.25)).clamp(0, 1);
     const autumnPalette = opts.autumnColor ?? [0.94, 0.48, 0.08];
@@ -830,7 +836,30 @@ export function forestCardMaterial(srcMat, opts = {}) {
       leafMask.mul(springFlush).mul(float(0.72)),
     );
     surfaceColor = mix(surfaceColor, autumnLeaf, leafMask.mul(autumnColor));
-    const dormantMask = leafMask.mul(dormancy);
+    // Reuse existing world/tree coordinates for stable cluster dropout and a
+    // small endpoint-preserving phenology offset. Leaves now disappear in
+    // coherent pockets instead of every alpha pixel fading in lockstep, while
+    // exact summer (0) and winter (1) endpoints remain unchanged.
+    const phenologyOffset = sin(
+      treeOrigin.x.mul(float(0.37)).add(treeOrigin.z.mul(float(0.53))),
+    ).mul(float(0.13))
+      .mul(dormancy)
+      .mul(float(1).sub(dormancy));
+    const effectiveDormancy = dormancy.add(phenologyOffset).clamp(0, 1);
+    const leafClusterNoise = sin(
+      positionWorld.x.mul(float(1.73))
+        .add(positionWorld.y.mul(float(1.21)))
+        .add(positionWorld.z.mul(float(1.47)))
+        .add(treeOrigin.x.mul(float(0.19)))
+        .add(treeOrigin.z.mul(float(0.27)))
+        // aThickness is already a stable per-card random value. Forest
+        // compaction deliberately gives every card on one tree the same
+        // aAnchorPos, so this existing attribute prevents whole crowns from
+        // shedding the same alpha pockets in lockstep without another buffer.
+        .add(attribute('aThickness', 'float').mul(float(7.31))),
+    ).mul(float(0.49)).add(float(0.5));
+    const clusterRetain = step(effectiveDormancy, leafClusterNoise);
+    const dormantMask = leafMask.mul(float(1).sub(clusterRetain));
     const dormantEdge = vec3(value.mul(1.08), value.mul(0.82), value.mul(0.58)).clamp(0, 1);
     seasonalRetain = float(1).sub(dormantMask);
     surfaceColor = mix(surfaceColor, dormantEdge, dormantMask);
@@ -839,6 +868,29 @@ export function forestCardMaterial(srcMat, opts = {}) {
     mat.userData.forestSeasonalAutumnColor = autumnColor;
     mat.userData.forestSeasonalDormancy = dormancy;
   }
+  // Settled snow is a surface response, not another foliage layer. The packed
+  // deciduous flag keeps mixed larch/fir buckets correct per tree, while the
+  // crown-space upward filter prevents snow from whitening vertical undersides.
+  // A small world-locked variation breaks up the cap without another sampler.
+  const snowCoverage = uniform(0);
+  const upwardExposure = base.y.smoothstep(float(0.2), float(0.86));
+  const snowVariation = sin(
+    positionWorld.x.mul(float(0.81))
+      .add(positionWorld.z.mul(float(1.13)))
+      .add(treeOrigin.x.mul(float(0.17)))
+      .add(treeOrigin.z.mul(float(0.23))),
+  ).mul(float(0.12)).add(float(0.88));
+  const snowAmount = foliageMask
+    // seasonalRetain is 1 for evergreens and only the still-present leaf
+    // fraction for deciduous cards. Late-November broadleaf leaves can now
+    // catch the first snow, while fully dormant foliage remains absent.
+    .mul(seasonalRetain)
+    .mul(snowCoverage)
+    .mul(upwardExposure)
+    .mul(snowVariation)
+    .mul(float(0.58));
+  const snowColor = vec3(0.92, 0.955, 0.98);
+  mat.userData.forestSnowCoverage = snowCoverage;
   if (opts.canopyTint || opts.toneVariation) {
     // Overview crowns share one material per species. Reuse the existing
     // per-instance tree origin for stable tonal breakup: this adds no attribute,
@@ -852,17 +904,20 @@ export function forestCardMaterial(srcMat, opts = {}) {
         .mul(float(opts.toneVariation))
         .add(1)
       : float(1);
-    mat.colorNode = surfaceColor.mul(tint).mul(occl).mul(variation);
+    const tintedSurface = surfaceColor.mul(tint).mul(variation);
+    mat.colorNode = mix(tintedSurface, snowColor, snowAmount).mul(occl);
     if (!opts.seasonalDeciduous) mat.opacityNode = texel.a;
   } else if (opts.seasonalDeciduous) {
-    mat.colorNode = surfaceColor.mul(occl);
+    mat.colorNode = mix(surfaceColor, snowColor, snowAmount).mul(occl);
   } else {
-    mat.colorNode = texel.mul(vec4(occl, occl, occl, 1));
+    mat.colorNode = mix(texel.rgb, snowColor, snowAmount).mul(occl);
+    mat.opacityNode = texel.a;
   }
   const transmit = uniform(new Color().setRGB(...TRANSMIT));
-  mat.thicknessColorNode = (dtMap ? texture(dtMap).r : uniform(1))
+  mat.thicknessColorNode = (transmission ?? uniform(1))
     .mul(attribute('aThickness', 'float'))
     .mul(seasonalRetain)
+    .mul(float(1).sub(snowAmount.mul(float(0.82))))
     .mul(transmit);
   mat.thicknessDistortionNode = uniform(0.3);
   mat.thicknessAmbientNode = uniform(0.16);
@@ -881,6 +936,16 @@ export function setForestCardDormancy(material, amount) {
   const next = Math.max(0, Math.min(1, Number.isFinite(amount) ? amount : 0));
   if (dormancy.value === next) return false;
   dormancy.value = next;
+  return true;
+}
+
+/** Updates settled evergreen snow coverage without rebuilding card materials. */
+export function setForestCardSnowCoverage(material, amount) {
+  const snowCoverage = material?.userData?.forestSnowCoverage;
+  if (!snowCoverage) return false;
+  const next = Math.max(0, Math.min(1, Number.isFinite(amount) ? amount : 0));
+  if (snowCoverage.value === next) return false;
+  snowCoverage.value = next;
   return true;
 }
 

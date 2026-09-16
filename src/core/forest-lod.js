@@ -361,6 +361,7 @@ export function createForestLodSelector(sourceItems, options = {}) {
     nearIndices: [],
     overviewIndices: [],
     viewIndices: [],
+    criticalViewIndices: [],
     lastCameraPosition: null,
     lastCameraDirection: null,
     lastProjection: null,
@@ -480,6 +481,7 @@ export function selectForestLods(selector, camera, options = {}) {
       nearIndices: selector.nearIndices,
       overviewIndices: selector.overviewIndices,
       viewIndices: selector.viewIndices,
+      criticalViewIndices: selector.criticalViewIndices,
       visibleCount: selector.nearIndices.length + selector.overviewIndices.length,
       culledCount: selector.items.length
         - selector.nearIndices.length
@@ -509,6 +511,7 @@ export function selectForestLods(selector, camera, options = {}) {
   const nearExit = nearDistance + hysteresis;
   const visible = [];
   const viewVisible = [];
+  const criticalViewVisible = [];
 
   for (const cell of selector.cells) {
     _sphere.center.set(cell.x, cell.y, cell.z);
@@ -525,8 +528,11 @@ export function selectForestLods(selector, camera, options = {}) {
     for (const index of cell.indices) {
       const item = selector.items[index];
       _sphere.center.set(item.x, item.y, item.z);
-      _sphere.radius = item.radius + padding;
-      const itemInView = frustum.intersectsSphere(_sphere);
+      _sphere.radius = item.radius;
+      const itemInCriticalView = frustum.intersectsSphere(_sphere);
+      if (itemInCriticalView) criticalViewVisible.push(index);
+      _sphere.radius += padding;
+      const itemInView = itemInCriticalView || frustum.intersectsSphere(_sphere);
       if (itemInView) viewVisible.push(index);
       if (
         itemInView
@@ -546,6 +552,7 @@ export function selectForestLods(selector, camera, options = {}) {
   // Stable order means a static camera never churns instance buffers.
   visible.sort((a, b) => a - b);
   viewVisible.sort((a, b) => a - b);
+  criticalViewVisible.sort((a, b) => a - b);
   const near = [];
   const overview = [];
   for (const index of visible) {
@@ -568,6 +575,7 @@ export function selectForestLods(selector, camera, options = {}) {
     || !sameIndices(overview, selector.overviewIndices)
     || !sameIndices(viewVisible, selector.viewIndices);
   selector.hasSelection = true;
+  selector.criticalViewIndices = criticalViewVisible;
   if (changed) {
     selector.nearIndices = near;
     selector.overviewIndices = overview;
@@ -579,6 +587,7 @@ export function selectForestLods(selector, camera, options = {}) {
     nearIndices: selector.nearIndices,
     overviewIndices: selector.overviewIndices,
     viewIndices: selector.viewIndices,
+    criticalViewIndices: selector.criticalViewIndices,
     visibleCount: selector.nearIndices.length + selector.overviewIndices.length,
     culledCount: selector.items.length
       - selector.nearIndices.length

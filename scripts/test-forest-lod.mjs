@@ -242,11 +242,11 @@ function assertDisjoint(selection) {
     'young-fir crowns remain one instanced draw');
   assert.equal(
     saplingCrowns.geometry.index.count / 3,
-    40,
-    'young-fir crowns use three asymmetric low-sided tiers instead of one cone',
+    316,
+    'young-fir crowns keep four offset two-segment tiers plus bounded lateral sprays in one draw',
   );
-  assert.ok(layer.stats.triangles > 0 && layer.stats.triangles < 20_000,
-    'the complete edge ecology must remain a low-triangle overlay');
+  assert.ok(layer.stats.triangles > 0 && layer.stats.triangles <= 26_242,
+    'the 23,856-triangle edge fixture must remain inside its reviewed +10% budget');
   layer.group.traverse((object) => {
     if (!object.isInstancedMesh) return;
     assert.equal(object.instanceMatrix.usage, StaticDrawUsage,

@@ -21,7 +21,7 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
   const skRng = new Rng(`${species.name}:${seed}`);
   // Crown clearance tracks the (live) rosette radius so bigger rosettes push
   // branches further apart automatically.
-  const skParams = { ...species.params, tipClearance: (species.foliage?.leafLen ?? 0.5) * 0.9 };
+  const skParams = { ...species.params, tipClearance: (species.foliage?.leafLen ?? species.foliage?.clusterSize ?? 0.5) * 0.9 };
   const { stems, terminalStems } = generateDichotomous(skParams, skRng);
 
   // Rosette foliage is ~93% of a dichotomous plant's triangles, and each rosette is
@@ -132,7 +132,48 @@ function buildDichotomousTree(species, seed, assets, lodOpts, reuse = null) {
     }
 
     let leafInstances = 0;
-    if (assets.rosetteMat && species.foliage !== false) {
+    if (species.foliageType === 'sprayClusters' && assets.clusterMat && species.foliage !== false) {
+      // Exact upstream shrub path: authored spray sheets follow the
+      // dichotomous terminal stems, with optional parent-wand mid-canopy fill.
+      const frng = new Rng(`${species.name}:${seed}:sprays${i}`);
+      const sprayDensity = lv.rosetteDensity ?? 1;
+      const cfg = {
+        ...species.foliage,
+        mode: 'clusters',
+        clustersPerBranch: Math.max(1, Math.round((species.foliage.clustersPerBranch ?? 2) * sprayDensity)),
+      };
+      const fol = buildFoliage(terminalStems, cfg, frng, assets.clusterMat, assets.clusterCenter);
+      let parentFol = null;
+      const parentFraction = species.foliage.parentSprays ?? 0;
+      if (parentFraction > 0) {
+        const parents = stems.filter((stem) => !stem.terminal && stem.children.some((child) => child.terminal));
+        if (parents.length) {
+          parentFol = buildFoliage(
+            parents,
+            { ...cfg, clustersPerBranch: Math.max(1, Math.round(cfg.clustersPerBranch * parentFraction)) },
+            new Rng(`${species.name}:${seed}:psprays${i}`),
+            assets.clusterMat,
+            null,
+          );
+        }
+      }
+      if (fol || parentFol) {
+        const shrubFoliage = new Group();
+        for (const foliageMesh of [fol, parentFol]) {
+          if (!foliageMesh) continue;
+          foliageMesh.traverse((object) => {
+            if (object.isMesh) {
+              object.castShadow = true;
+              object.receiveShadow = true;
+              leafInstances += object.count || 0;
+            }
+          });
+          shrubFoliage.add(foliageMesh);
+        }
+        level.add(shrubFoliage);
+        level.userData.folGroup = shrubFoliage;
+      }
+    } else if (assets.rosetteMat && species.foliage !== false) {
       const frng = new Rng(`${species.name}:${seed}:rosette${i}`);
       // Pass the persistent foliage Group on reuse so buildYuccaFoliage rewrites
       // its per-cone InstancedMesh buffers in place (setMatrixAt, never swap).
@@ -402,7 +443,9 @@ export function buildTree(species, seed, assets = {}, lodOpts = {}, reuse = null
   // from-scratch generator — see docs/dichotomous-generator.md. `reuse` (an
   // existing same-species LOD) rewrites its meshes in place to dodge the WebGPU
   // per-render-object pipeline recompile (the edit freeze). Oak path ignores it.
-  if (species.foliageType === 'rosette') return buildDichotomousTree(species, seed, assets, lodOpts, reuse);
+  if (species.foliageType === 'rosette' || species.category === 'shrub') {
+    return buildDichotomousTree(species, seed, assets, lodOpts, reuse);
+  }
 
   const rng = new Rng(`${species.name}:${seed}`);
   const { stems, tips } = generateSkeleton(species.params, rng);

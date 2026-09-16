@@ -154,7 +154,14 @@ function defaultNow() {
 
 function sameSelection(left, right) {
   return sameIndices(left?.near, right?.near)
-    && sameIndices(left?.overview, right?.overview);
+    && sameIndices(left?.overview, right?.overview)
+    && sameOptionalIndices(left?.viewNear, right?.viewNear)
+    && sameOptionalIndices(left?.viewOverview, right?.viewOverview);
+}
+
+function sameOptionalIndices(left, right) {
+  if (left === undefined && right === undefined) return true;
+  return sameIndices(left, right);
 }
 
 function sameIndices(left, right) {
