@@ -1,5 +1,4 @@
 // Species registry. Add presets here and they appear in the UI dropdown.
-import { commonFern } from './common-fern.js';
 import { whiteOak } from './white-oak.js';
 import { redMaple } from './red-maple.js';
 import { tulipPoplar } from './tulip-poplar.js';
@@ -20,9 +19,9 @@ import { weepingWillow } from './weeping-willow.js';
 import { creosote } from './creosote.js';
 import { blackbrush } from './blackbrush.js';
 import { sagebrush } from './sagebrush.js';
+import { commonFern } from './common-fern.js';
 
 export const SPECIES = {
-  commonFern,
   whiteOak,
   redMaple,
   tulipPoplar,
@@ -43,6 +42,7 @@ export const SPECIES = {
   creosote,
   blackbrush,
   sagebrush,
+  commonFern,
 };
 
 export const DEFAULT_SPECIES = 'whiteOak';
