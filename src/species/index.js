@@ -1,7 +1,4 @@
 // Species registry. Add presets here and they appear in the UI dropdown.
-import { commonJuniper } from './common-juniper.js';
-import { bilberry } from './bilberry.js';
-import { raspberry } from './raspberry.js';
 import { whiteOak } from './white-oak.js';
 import { redMaple } from './red-maple.js';
 import { tulipPoplar } from './tulip-poplar.js';
@@ -14,6 +11,9 @@ import { loblolly } from './loblolly.js';
 import { douglasFir } from './douglas-fir.js';
 import { apple } from './apple.js';
 import { cherry } from './cherry.js';
+import { commonJuniper } from './common-juniper.js';
+import { bilberry } from './bilberry.js';
+import { raspberry } from './raspberry.js';
 import { paperBirch } from './paper-birch.js';
 import { quakingAspen } from './quaking-aspen.js';
 import { americanSycamore } from './american-sycamore.js';
@@ -24,9 +24,6 @@ import { blackbrush } from './blackbrush.js';
 import { sagebrush } from './sagebrush.js';
 
 export const SPECIES = {
-  commonJuniper,
-  bilberry,
-  raspberry,
   whiteOak,
   redMaple,
   tulipPoplar,
@@ -37,6 +34,9 @@ export const SPECIES = {
   douglasFir,
   apple,
   cherry,
+  commonJuniper,
+  bilberry,
+  raspberry,
   paperBirch,
   quakingAspen,
   americanSycamore,
